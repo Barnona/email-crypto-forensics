@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+data/sample_pcaps/*.pcap
+data/sample_pcaps/*.pcapng
+data/trained_models/*.joblib
+out/

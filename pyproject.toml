@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "email-crypto-forensics"
+version = "0.1.0"
+description = "AI-assisted passive network forensic framework for assessing the cryptographic security posture of SMTP/IMAP/POP3 email infrastructure"
+requires-python = ">=3.10"
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

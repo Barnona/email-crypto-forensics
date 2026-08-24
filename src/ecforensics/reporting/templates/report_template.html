@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Email Cryptographic Security Posture Report</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+  th, td { border: 1px solid #ddd; padding: 8px 10px; font-size: 0.85rem; text-align: left; vertical-align: top; }
+  th { background: #f4f4f4; }
+  .sev-CRITICAL { background: #fcebeb; color: #791f1f; font-weight: 600; }
+  .sev-HIGH     { background: #faeeda; color: #633806; font-weight: 600; }
+  .sev-MEDIUM   { background: #faeeda; color: #854f0b; }
+  .sev-LOW      { background: #eaf3de; color: #3b6d11; }
+  .sev-INFO     { background: #f1efe8; color: #444441; }
+  .findings { margin: 0; padding-left: 1.1rem; }
+</style>
+</head>
+<body>
+  <h1>Email Cryptographic Security Posture Report</h1>
+  <p>{{ sessions|length }} session(s) analyzed.</p>
+
+  <!-- TODO: add a summary panel here (counts per severity, top finding
+       categories) once reporting/json_report.py's summary block is implemented,
+       so the JSON and HTML exports stay consistent. -->
+
+  <table>
+    <thead>
+      <tr>
+        <th>Session</th>
+        <th>Protocol</th>
+        <th>Src -&gt; Dst</th>
+        <th>TLS</th>
+        <th>Severity</th>
+        <th>Risk score</th>
+        <th>Findings</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for session in sessions %}
+      <tr class="sev-{{ severity_of(session).value }}">
+        <td>{{ session.session_id }}</td>
+        <td>{{ session.protocol.value }}</td>
+        <td>{{ session.src_ip }}:{{ session.src_port }} &rarr; {{ session.dst_ip }}:{{ session.dst_port }}</td>
+        <td>
+          {% if session.tls_session %}
+            {{ session.tls_session.tls_version }} / {{ session.tls_session.cipher_suite }}
+          {% else %}
+            none (plaintext)
+          {% endif %}
+        </td>
+        <td>{{ severity_of(session).value }}</td>
+        <td>{{ session.risk_score }}</td>
+        <td>
+          <ul class="findings">
+            {% for finding in session.findings %}
+            <li><strong>[{{ finding.rule_id }}]</strong> {{ finding.description }}</li>
+            {% else %}
+            <li>No findings.</li>
+            {% endfor %}
+          </ul>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

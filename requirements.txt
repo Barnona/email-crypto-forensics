@@ -1,0 +1,24 @@
+# Ingestion / packet parsing
+pyshark>=0.6          # requires tshark installed on the host
+dpkt>=1.9.8
+scapy>=2.5
+
+# Certificates / crypto
+cryptography>=42.0
+pyOpenSSL>=24.0
+
+# Feature engineering / ML
+pandas>=2.0
+scikit-learn>=1.4
+joblib>=1.3
+
+# API / dashboard
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Reporting
+jinja2>=3.1
+weasyprint>=61.0      # needs system Pango/Cairo -- see README setup notes
+
+# Testing
+pytest>=8.0
