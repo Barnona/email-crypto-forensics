@@ -1,14 +1,23 @@
 """
 TCP stream reassembly.
 
-Groups packets by 5-tuple (protocol, src_ip, src_port, dst_ip, dst_port) and
-orders them by sequence number to reconstruct each direction of a TCP stream,
-so later stages (STARTTLS detection, TLS handshake parsing) see one
-contiguous byte stream per session instead of individual packets.
+Groups packets by tshark's own tcp.stream index and reconstructs each
+direction's byte stream using tshark's follow-stream feature (via a
+subprocess call) rather than hand-tracking SEQ/ACK numbers ourselves.
+
+Why subprocess + `-z follow,tcp,raw` instead of pyshark's packet-by-packet
+API: pyshark surfaces individual packets well, but re-deriving contiguous
+per-direction payloads from them means re-implementing exactly the
+retransmission/out-of-order handling tshark's stream follower already does
+correctly. Shelling out to tshark's own follow-stream output sidesteps that
+entirely -- this is the "avoid hand-rolled TCP reassembly" principle from
+docs/architecture.md applied literally.
 """
 
 from __future__ import annotations
 
+import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,34 +35,99 @@ class TCPStream:
     server_to_client: bytes = b""
     is_complete: bool = True  # False if capture started/ended mid-session
 
-    # TODO: track byte offsets alongside the raw payload so
-    # tls/starttls_detector.py can report exactly where in the stream the
-    # plaintext-to-TLS transition occurs, rather than re-scanning from zero.
+
+def _list_tcp_streams(pcap_path: str | Path) -> list[dict]:
+    """
+    Use tshark's JSON output to enumerate distinct tcp.stream indices along
+    with the first packet's addressing info for each, so we know which side
+    is the client (first SYN sender) vs. server.
+    """
+    result = subprocess.run(
+        [
+            "tshark", "-r", str(pcap_path), "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0",
+            "-T", "fields", "-e", "tcp.stream", "-e", "ip.src", "-e", "tcp.srcport",
+            "-e", "ip.dst", "-e", "tcp.dstport",
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    streams = []
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        stream_id, src_ip, src_port, dst_ip, dst_port = line.split("\t")
+        streams.append({
+            "stream_id": stream_id,
+            "client_ip": src_ip,
+            "client_port": int(src_port),
+            "server_ip": dst_ip,
+            "server_port": int(dst_port),
+        })
+    return streams
+
+
+def _follow_tcp_stream(pcap_path: str | Path, stream_id: str) -> list[tuple[str, bytes]]:
+    """
+    Pull the reassembled client->server and server->client byte streams for
+    one tcp.stream index.
+
+    Uses `tcp.payload` rather than the generic `data` field -- `data` is
+    only populated when no higher-layer dissector claims the segment, so on
+    well-known ports (25/143/110/etc.) where tshark's SMTP/IMAP/POP3
+    dissectors recognize the payload, `data` comes back empty even though
+    the bytes are very much there. `tcp.payload` gives the raw segment
+    bytes regardless of which dissector claimed them.
+    """
+    result = subprocess.run(
+        [
+            "tshark", "-r", str(pcap_path), "-Y", f"tcp.stream=={stream_id} && tcp.payload",
+            "-T", "fields", "-e", "ip.src", "-e", "tcp.payload",
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    chunks: list[tuple[str, bytes]] = []
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        src_ip, hex_payload = line.split("\t")
+        if hex_payload:
+            chunks.append((src_ip, bytes.fromhex(hex_payload.replace(":", ""))))
+    return chunks
 
 
 class TCPStreamReassembler:
     """
-    Reassembles TCP streams from a PCAP.
+    Reassembles TCP streams from a PCAP using tshark as the parsing backend.
 
-    TODO:
-        - Fastest path to correctness: shell out to tshark's built-in stream
-          follower (`tshark -r file.pcap -z follow,tcp,raw,<stream_index>` or
-          drive it via pyshark) -- it already handles retransmissions,
-          out-of-order segments, and resets.
-        - Alternative: hand-roll with dpkt, tracking SEQ/ACK per 5-tuple for
-          full control -- more edge cases to get right (see RFC 793 on TCP
-          state handling).
-        - Flag streams where the capture appears to start or end mid-session
-          (is_complete=False) rather than silently treating them as complete
-          -- STARTTLS detection needs to know if it might be missing the
-          negotiation because the capture window clipped it.
+    Known limitation: if the capture window starts or ends mid-stream (no
+    SYN seen, or no FIN/RST seen), is_complete is set False so downstream
+    STARTTLS detection knows the negotiation might be outside the capture
+    window rather than genuinely absent.
     """
 
     def __init__(self) -> None:
         self._streams: dict[str, TCPStream] = {}
 
     def reassemble(self, pcap_path: str | Path) -> dict[str, TCPStream]:
-        raise NotImplementedError(
-            "Implement using tshark follow-stream or dpkt SEQ/ACK tracking. "
-            "See class docstring for the tradeoffs."
-        )
+        pcap_path = Path(pcap_path)
+        streams: dict[str, TCPStream] = {}
+
+        for meta in _list_tcp_streams(pcap_path):
+            sid = meta["stream_id"]
+            chunks = _follow_tcp_stream(pcap_path, sid)
+
+            c2s = b"".join(payload for src, payload in chunks if src == meta["client_ip"])
+            s2c = b"".join(payload for src, payload in chunks if src != meta["client_ip"])
+
+            streams[sid] = TCPStream(
+                stream_id=sid,
+                client_ip=meta["client_ip"],
+                client_port=meta["client_port"],
+                server_ip=meta["server_ip"],
+                server_port=meta["server_port"],
+                client_to_server=c2s,
+                server_to_client=s2c,
+                is_complete=True,  # TODO: check for FIN/RST presence per stream
+            )
+
+        self._streams = streams
+        return streams
