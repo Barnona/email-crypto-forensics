@@ -1,4 +1,4 @@
-"""TCP stream reconstruction backed by TShark's TCP dissector."""
+"""TCP stream reconstruction backed by TShark packet fields."""
 from __future__ import annotations
 
 import subprocess
@@ -29,81 +29,160 @@ def _run_tshark(args: list[str]) -> str:
     return result.stdout
 
 
+def _endpoint(ipv4: str, ipv6: str, port: str) -> tuple[str, int] | None:
+    address = ipv4 or ipv6
+    if not address or not port:
+        return None
+    try:
+        return address, int(port)
+    except ValueError:
+        return None
+
+
 def _list_tcp_streams(pcap_path: str | Path) -> list[dict]:
+    """Discover TCP streams from the original SYN and support IPv4/IPv6."""
     output = _run_tshark([
-        "-r", str(pcap_path), "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0",
-        "-T", "fields", "-E", "separator=\t",
-        "-e", "tcp.stream", "-e", "ip.src", "-e", "tcp.srcport", "-e", "ip.dst", "-e", "tcp.dstport",
+        "-r", str(pcap_path),
+        "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0",
+        "-T", "fields", "-E", "separator=\t", "-E", "quote=n",
+        "-e", "tcp.stream", "-e", "ip.src", "-e", "ipv6.src",
+        "-e", "tcp.srcport", "-e", "ip.dst", "-e", "ipv6.dst", "-e", "tcp.dstport",
     ])
     seen: set[str] = set()
     streams: list[dict] = []
     for line in output.splitlines():
         parts = line.split("\t")
-        if len(parts) != 5 or parts[0] in seen:
+        if len(parts) != 7 or not parts[0] or parts[0] in seen:
+            continue
+        client = _endpoint(parts[1], parts[2], parts[3])
+        server = _endpoint(parts[4], parts[5], parts[6])
+        if client is None or server is None:
             continue
         seen.add(parts[0])
-        streams.append({"stream_id": parts[0], "client_ip": parts[1], "client_port": int(parts[2]),
-                        "server_ip": parts[3], "server_port": int(parts[4])})
+        streams.append({
+            "stream_id": parts[0],
+            "client_ip": client[0], "client_port": client[1],
+            "server_ip": server[0], "server_port": server[1],
+        })
     return streams
 
 
-def _stream_metadata(pcap_path: str | Path, stream_id: str) -> tuple[bool, datetime | None, datetime | None]:
-    output = _run_tshark([
-        "-r", str(pcap_path), "-Y", f"tcp.stream=={stream_id}", "-T", "fields",
-        "-e", "frame.time_epoch", "-e", "tcp.flags.fin", "-e", "tcp.flags.reset",
-    ])
-    rows = [line.split("\t") for line in output.splitlines() if line]
-    if not rows:
-        return False, None, None
-    times = [float(r[0]) for r in rows if r and r[0]]
-    closed = any(len(r) > 2 and (r[1] == "1" or r[2] == "1") for r in rows)
-    start = datetime.fromtimestamp(min(times), timezone.utc) if times else None
-    end = datetime.fromtimestamp(max(times), timezone.utc) if times else None
-    return closed, start, end
+def _reassemble_direction(chunks: list[tuple[int, bytes]]) -> tuple[bytes, bool]:
+    """Reassemble one TCP direction and report whether payload has sequence gaps.
 
-
-def _follow_tcp_stream(pcap_path: str | Path, stream_id: str) -> list[tuple[str, int, bytes]]:
-    """Return payload chunks in capture/sequence order using tshark fields.
-
-    TShark's TCP dissector performs TCP desegmentation when applicable. We
-    retain direction metadata and concatenate only payload-bearing segments.
+    Chunks are keyed by absolute TCP sequence number. Out-of-order data is
+    sorted, exact retransmissions are discarded, and partially overlapping
+    retransmissions contribute only bytes not already present. A gap remains
+    a gap rather than being silently hidden by capture-order concatenation.
     """
+    if not chunks:
+        return b"", False
+
+    chunks = sorted((seq, payload) for seq, payload in chunks if payload)
+    if not chunks:
+        return b"", False
+
+    assembled = bytearray()
+    expected = chunks[0][0]
+    has_gap = False
+    for seq, payload in chunks:
+        end = seq + len(payload)
+        if end <= expected:
+            continue
+        if seq > expected:
+            has_gap = True
+            assembled.extend(payload)
+            expected = end
+            continue
+        # seq <= expected < end: append only the previously unseen suffix.
+        overlap = expected - seq
+        assembled.extend(payload[overlap:])
+        expected = end
+    return bytes(assembled), has_gap
+
+
+def _stream_packets(pcap_path: str | Path, stream_id: str) -> list[dict]:
+    """Extract packet metadata needed for deterministic TCP reassembly."""
     output = _run_tshark([
-        "-r", str(pcap_path), "-Y", f"tcp.stream=={stream_id} && tcp.payload",
-        "-T", "fields", "-E", "separator=\t", "-e", "tcp.seq", "-e", "ip.src", "-e", "tcp.srcport", "-e", "tcp.payload",
+        "-r", str(pcap_path), "-Y", f"tcp.stream=={stream_id}",
+        "-T", "fields", "-E", "separator=\t", "-E", "quote=n",
+        "-e", "frame.time_epoch", "-e", "ip.src", "-e", "ipv6.src",
+        "-e", "tcp.srcport", "-e", "tcp.seq_raw", "-e", "tcp.len",
+        "-e", "tcp.payload", "-e", "tcp.flags.fin", "-e", "tcp.flags.reset",
     ])
-    chunks: list[tuple[str, int, bytes]] = []
-    last_seq: dict[tuple[str, int], int] = {}
+    packets: list[dict] = []
     for line in output.splitlines():
         parts = line.split("\t")
-        if len(parts) != 4 or not parts[3]:
+        if len(parts) != 9:
             continue
+        src = parts[1] or parts[2]
         try:
-            seq = int(parts[0])
-            payload = bytes.fromhex(parts[3].replace(":", ""))
-            key = (parts[1], int(parts[2]))
-        except (ValueError, TypeError):
+            time = float(parts[0])
+            src_port = int(parts[3])
+            seq = int(parts[4]) if parts[4] else None
+            tcp_len = int(parts[5]) if parts[5] else 0
+        except ValueError:
             continue
-        # Avoid duplicate retransmissions while preserving legitimate segments.
-        previous = last_seq.get(key)
-        if previous is not None and seq < previous:
+        payload = b""
+        if parts[6]:
+            try:
+                payload = bytes.fromhex(parts[6].replace(":", ""))
+            except ValueError:
+                payload = b""
+        packets.append({
+            "time": time, "src": src, "src_port": src_port,
+            "seq": seq, "tcp_len": tcp_len, "payload": payload,
+            "fin": parts[7] == "1", "reset": parts[8] == "1",
+        })
+    return packets
+
+
+def _reassemble_stream(pcap_path: str | Path, meta: dict) -> TCPStream:
+    packets = _stream_packets(pcap_path, meta["stream_id"])
+    client_key = (meta["client_ip"], meta["client_port"])
+    c2s_chunks: list[tuple[int, bytes]] = []
+    s2c_chunks: list[tuple[int, bytes]] = []
+    client_fin = server_fin = False
+    reset_seen = False
+
+    for packet in packets:
+        key = (packet["src"], packet["src_port"])
+        if packet["fin"]:
+            if key == client_key:
+                client_fin = True
+            elif key == (meta["server_ip"], meta["server_port"]):
+                server_fin = True
+        reset_seen = reset_seen or packet["reset"]
+        if packet["seq"] is None or not packet["payload"]:
             continue
-        last_seq[key] = seq + len(payload)
-        chunks.append((parts[1], int(parts[2]), payload))
-    return chunks
+        if key == client_key:
+            c2s_chunks.append((packet["seq"], packet["payload"]))
+        elif key == (meta["server_ip"], meta["server_port"]):
+            s2c_chunks.append((packet["seq"], packet["payload"]))
+
+    c2s, c2s_gap = _reassemble_direction(c2s_chunks)
+    s2c, s2c_gap = _reassemble_direction(s2c_chunks)
+    complete = (client_fin and server_fin or reset_seen) and not (c2s_gap or s2c_gap)
+    times = [packet["time"] for packet in packets]
+    start = datetime.fromtimestamp(min(times), timezone.utc) if times else None
+    end = datetime.fromtimestamp(max(times), timezone.utc) if times else None
+
+    return TCPStream(
+        **meta,
+        client_to_server=c2s,
+        server_to_client=s2c,
+        is_complete=complete,
+        start_time=start,
+        end_time=end,
+    )
 
 
 class TCPStreamReassembler:
     def reassemble(self, pcap_path: str | Path) -> dict[str, TCPStream]:
         pcap_path = Path(pcap_path)
-        streams: dict[str, TCPStream] = {}
-        for meta in _list_tcp_streams(pcap_path):
-            sid = meta["stream_id"]
-            chunks = _follow_tcp_stream(pcap_path, sid)
-            ckey = (meta["client_ip"], meta["client_port"])
-            c2s = b"".join(p for ip, port, p in chunks if (ip, port) == ckey)
-            s2c = b"".join(p for ip, port, p in chunks if (ip, port) != ckey)
-            complete, start, end = _stream_metadata(pcap_path, sid)
-            streams[sid] = TCPStream(**meta, client_to_server=c2s, server_to_client=s2c,
-                                     is_complete=complete, start_time=start, end_time=end)
-        return streams
+        if not pcap_path.is_file():
+            raise FileNotFoundError(f"PCAP/PCAPNG file not found: {pcap_path}")
+        return {
+            meta["stream_id"]: _reassemble_stream(pcap_path, meta)
+            for meta in _list_tcp_streams(pcap_path)
+        }
