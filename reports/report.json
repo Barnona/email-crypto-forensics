@@ -1,6 +1,6 @@
 {
   "tool": "SecureMailScope",
-  "generated_at": "2026-09-04T15:59:15.858455+00:00",
+  "generated_at": "2026-09-04T16:06:37.056615+00:00",
   "session_count": 4,
   "sessions": [
     {
@@ -10,7 +10,7 @@
       "src_port": 40001,
       "dst_ip": "198.51.100.20",
       "dst_port": 25,
-      "start_time": "2026-09-04T15:59:15.238517+00:00",
+      "start_time": "2026-09-04T16:06:36.569379+00:00",
       "end_time": null,
       "starttls_offered": false,
       "starttls_used": false,
@@ -23,6 +23,14 @@
           "description": "SMTP session on port 25 carried no TLS encryption at any point (credentials and message content sent in cleartext).",
           "recommendation": "Enforce mandatory TLS -- either move the service to an implicit-TLS port or configure the server to require STARTTLS before accepting authentication/mail commands.",
           "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
         }
       ],
       "risk_score": 50,
@@ -35,7 +43,7 @@
       "src_port": 40002,
       "dst_ip": "198.51.100.21",
       "dst_port": 587,
-      "start_time": "2026-09-04T15:59:15.238871+00:00",
+      "start_time": "2026-09-04T16:06:36.569770+00:00",
       "end_time": null,
       "starttls_offered": true,
       "starttls_used": false,
@@ -56,6 +64,14 @@
           "description": "Server advertised STARTTLS support but the client session proceeded in plaintext anyway.",
           "recommendation": "Enforce STARTTLS on the server -- reject AUTH/mail commands until TLS has been negotiated (many MTAs support a 'require STARTTLS' setting for exactly this).",
           "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
         }
       ],
       "risk_score": 20,
@@ -68,7 +84,7 @@
       "src_port": 40004,
       "dst_ip": "198.51.100.23",
       "dst_port": 110,
-      "start_time": "2026-09-04T15:59:15.238907+00:00",
+      "start_time": "2026-09-04T16:06:36.569800+00:00",
       "end_time": null,
       "starttls_offered": true,
       "starttls_used": false,
@@ -89,6 +105,14 @@
           "description": "Server advertised STARTTLS support but the client session proceeded in plaintext anyway.",
           "recommendation": "Enforce STARTTLS on the server -- reject AUTH/mail commands until TLS has been negotiated (many MTAs support a 'require STARTTLS' setting for exactly this).",
           "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
         }
       ],
       "risk_score": 20,
@@ -101,7 +125,7 @@
       "src_port": 40003,
       "dst_ip": "198.51.100.22",
       "dst_port": 143,
-      "start_time": "2026-09-04T15:59:15.238895+00:00",
+      "start_time": "2026-09-04T16:06:36.569791+00:00",
       "end_time": null,
       "starttls_offered": true,
       "starttls_used": false,
@@ -122,6 +146,14 @@
           "description": "Server advertised STARTTLS support but the client session proceeded in plaintext anyway.",
           "recommendation": "Enforce STARTTLS on the server -- reject AUTH/mail commands until TLS has been negotiated (many MTAs support a 'require STARTTLS' setting for exactly this).",
           "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
         },
         {
           "rule_id": "ML-ANOMALY-001",
