@@ -17,6 +17,7 @@ from pathlib import Path
 from ecforensics.ingestion.stream_reassembly import TCPStreamReassembler
 from ecforensics.ingestion.protocol_identifier import identify_protocol, is_implicit_tls_port
 from ecforensics.tls.starttls_detector import detect_starttls
+from ecforensics.tls.handshake_parser import TLSHandshakeParser
 from ecforensics.models.session import EmailSession
 from ecforensics.risk_engine.scorer import assess_sessions, overall_severity
 
@@ -24,6 +25,7 @@ from ecforensics.risk_engine.scorer import assess_sessions, overall_severity
 def build_sessions_from_pcap(pcap_path: str | Path) -> list[EmailSession]:
     reassembler = TCPStreamReassembler()
     streams = reassembler.reassemble(pcap_path)
+    handshake_parser = TLSHandshakeParser()
 
     sessions = []
     for stream_id, stream in streams.items():
@@ -43,16 +45,21 @@ def build_sessions_from_pcap(pcap_path: str | Path) -> list[EmailSession]:
         )
 
         if is_implicit_tls_port(stream.server_port):
-            # TLS from byte 0 -- handshake_parser.py needed to populate
-            # tls_session; not yet implemented, so leave it None for now
-            # rather than fabricating a TLSSession we didn't actually parse.
-            pass
+            # TLS from byte 0 -- ask the handshake parser directly, no
+            # STARTTLS bookkeeping needed since there's no plaintext phase.
+            session.tls_session = handshake_parser.parse(pcap_path, stream_id)
         else:
             starttls = detect_starttls(protocol, stream.client_to_server, stream.server_to_client)
             session.starttls_offered = starttls.offered
             session.starttls_used = starttls.negotiated
-            # tls_session stays None until handshake_parser.py is implemented
-            # to parse the bytes after starttls.upgrade_offset.
+            if starttls.negotiated:
+                # tshark's TLS dissector auto-detects the plaintext->TLS
+                # transition within the stream (confirmed against a real
+                # STARTTLS capture -- see tests/test_handshake_parser.py),
+                # so parsing the whole stream_id is sufficient; no manual
+                # byte-offset slicing needed.
+                session.tls_session = handshake_parser.parse(pcap_path, stream_id)
+            # else: plaintext throughout, tls_session stays None
 
         sessions.append(session)
 

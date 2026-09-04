@@ -65,7 +65,7 @@ def _list_tcp_streams(pcap_path: str | Path) -> list[dict]:
     return streams
 
 
-def _follow_tcp_stream(pcap_path: str | Path, stream_id: str) -> list[tuple[str, bytes]]:
+def _follow_tcp_stream(pcap_path: str | Path, stream_id: str) -> list[tuple[str, int, bytes]]:
     """
     Pull the reassembled client->server and server->client byte streams for
     one tcp.stream index.
@@ -76,21 +76,30 @@ def _follow_tcp_stream(pcap_path: str | Path, stream_id: str) -> list[tuple[str,
     dissectors recognize the payload, `data` comes back empty even though
     the bytes are very much there. `tcp.payload` gives the raw segment
     bytes regardless of which dissector claimed them.
+
+    Returns (src_ip, src_port, payload) tuples rather than just (src_ip,
+    payload) -- IP alone is not sufficient to attribute direction when
+    client and server share an IP (e.g. loopback captures, or two services
+    on the same host), since both directions would show the same src_ip.
+    Matching on (ip, port) together is unambiguous.
     """
     result = subprocess.run(
         [
             "tshark", "-r", str(pcap_path), "-Y", f"tcp.stream=={stream_id} && tcp.payload",
-            "-T", "fields", "-e", "ip.src", "-e", "tcp.payload",
+            "-T", "fields", "-e", "ip.src", "-e", "tcp.srcport", "-e", "tcp.payload",
         ],
         capture_output=True, text=True, check=True,
     )
-    chunks: list[tuple[str, bytes]] = []
+    chunks: list[tuple[str, int, bytes]] = []
     for line in result.stdout.strip().splitlines():
         if not line:
             continue
-        src_ip, hex_payload = line.split("\t")
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        src_ip, src_port, hex_payload = parts
         if hex_payload:
-            chunks.append((src_ip, bytes.fromhex(hex_payload.replace(":", ""))))
+            chunks.append((src_ip, int(src_port), bytes.fromhex(hex_payload.replace(":", ""))))
     return chunks
 
 
@@ -115,8 +124,14 @@ class TCPStreamReassembler:
             sid = meta["stream_id"]
             chunks = _follow_tcp_stream(pcap_path, sid)
 
-            c2s = b"".join(payload for src, payload in chunks if src == meta["client_ip"])
-            s2c = b"".join(payload for src, payload in chunks if src != meta["client_ip"])
+            c2s = b"".join(
+                payload for src_ip, src_port, payload in chunks
+                if (src_ip, src_port) == (meta["client_ip"], meta["client_port"])
+            )
+            s2c = b"".join(
+                payload for src_ip, src_port, payload in chunks
+                if (src_ip, src_port) != (meta["client_ip"], meta["client_port"])
+            )
 
             streams[sid] = TCPStream(
                 stream_id=sid,
