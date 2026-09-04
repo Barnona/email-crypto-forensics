@@ -1,9 +1,7 @@
 """Canonical SecureMailScope analysis pipeline."""
 from __future__ import annotations
-
 from datetime import datetime, timezone
 from pathlib import Path
-
 from ecforensics.certificates.validator import validate_chain
 from ecforensics.ingestion.protocol_identifier import identify_protocol, is_implicit_tls_port
 from ecforensics.ingestion.stream_reassembly import TCPStreamReassembler
@@ -15,13 +13,12 @@ from ecforensics.risk_engine.scorer import assess_sessions
 from ecforensics.tls.handshake_parser import TLSHandshakeParser
 from ecforensics.tls.starttls_detector import detect_starttls
 
-_PENALTIES = {Severity.INFO: 0, Severity.LOW: 5, Severity.MEDIUM: 15, Severity.HIGH: 30, Severity.CRITICAL: 50}
-
 
 def _populate_certificate_chain_status(session: EmailSession) -> None:
     if session.tls_session and session.tls_session.certificates:
+        valid = validate_chain(session.tls_session.certificates)
         for cert in session.tls_session.certificates:
-            cert.chain_valid = validate_chain(session.tls_session.certificates)
+            cert.chain_valid = valid
 
 
 def build_sessions_from_pcap(pcap_path: str | Path) -> list[EmailSession]:
@@ -81,8 +78,6 @@ def apply_ml(sessions: list[EmailSession], risk_model_path: str | Path | None = 
                 session.findings.append(RiskFinding("ML-ANOMALY-001", Severity.LOW, "ANOMALY",
                     f"Isolation Forest marked this session as anomalous (decision score {float(score):.4f}).",
                     "Review the session; an anomaly is a triage signal, not proof of compromise.", "ml"))
-    for session in sessions:
-        session.risk_score = max(0, 100 - sum(_PENALTIES[f.severity] for f in session.findings))
 
 
 def analyze(pcap_path: str | Path, risk_model_path: str | Path | None = None,
