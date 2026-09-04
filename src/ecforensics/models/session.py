@@ -1,13 +1,4 @@
-"""
-Core data models shared across the email cryptographic forensics pipeline.
-
-These dataclasses are the contract between pipeline stages: ingestion produces
-EmailSession objects, the TLS/certificate stages populate them, the risk engine
-and ML layer attach findings and scores, and the reporting layer serializes them.
-Changing a field here has ripple effects across nearly every other module --
-treat this file as the schema it effectively is.
-"""
-
+"""Core data models shared across the SecureMailScope pipeline."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -33,8 +24,6 @@ class Severity(str, Enum):
 
 @dataclass
 class Certificate:
-    """A parsed X.509 certificate extracted from a TLS handshake."""
-
     subject: str
     issuer: str
     serial_number: str
@@ -51,8 +40,6 @@ class Certificate:
 
 @dataclass
 class TLSSession:
-    """Everything learned from parsing a single TLS handshake."""
-
     tls_version: str
     cipher_suite: str
     key_exchange: Optional[str] = None
@@ -64,8 +51,6 @@ class TLSSession:
 
 @dataclass
 class RiskFinding:
-    """A single cryptographic weakness identified by the rule engine or ML layer."""
-
     rule_id: str
     severity: Severity
     category: str
@@ -76,8 +61,12 @@ class RiskFinding:
 
 @dataclass
 class EmailSession:
-    """A single reconstructed email protocol session (one TCP stream)."""
+    """One observed email-protocol TCP session.
 
+    ``tls_session is None`` means TLS details were not reconstructed; it does
+    not by itself prove plaintext. ``tls_attempted`` and ``capture_complete``
+    preserve that distinction for forensic decisions.
+    """
     session_id: str
     protocol: EmailProtocol
     src_ip: str
@@ -86,9 +75,12 @@ class EmailSession:
     dst_port: int
     start_time: datetime
     end_time: Optional[datetime] = None
+    capture_complete: bool = True
     starttls_offered: bool = False
     starttls_used: bool = False
+    tls_attempted: bool = False
     tls_session: Optional[TLSSession] = None
+    analysis_notes: list[str] = field(default_factory=list)
     findings: list[RiskFinding] = field(default_factory=list)
     risk_score: Optional[float] = None
     ml_risk_class: Optional[str] = None
