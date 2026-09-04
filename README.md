@@ -1,91 +1,120 @@
-# Email Cryptographic Forensics Framework
+# SecureMailScope — Email Cryptographic Forensics
 
-AI-assisted passive network forensic framework that analyzes captured SMTP,
-IMAP, and POP3 traffic (PCAP files) to assess the cryptographic security
-posture of email infrastructure -- TLS version and cipher suite strength,
-STARTTLS enforcement, and X.509 certificate health -- and produces
-prioritized, exportable findings for SOC / DFIR / incident response teams.
+SecureMailScope is a passive PCAP/PCAPNG forensic framework for SMTP, IMAP and POP3. It reconstructs TCP sessions, detects STARTTLS/implicit TLS, parses observable TLS handshakes and X.509 certificates, applies deterministic cryptographic risk rules, optionally adds supervised risk classification and Isolation Forest anomaly scoring, and exports JSON/HTML/PDF reports.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full pipeline
-design and rationale.
+## Architecture
 
-## Status
+All supported interfaces use one canonical pipeline:
 
-This is a **project scaffold**: the data models, module boundaries, rule
-engine logic, and tests are in place; the packet-parsing and ML internals
-are stubbed with `NotImplementedError` and detailed `TODO` docstrings
-describing exactly how to implement each one. See the roadmap in
-`docs/architecture.md` for build order.
+```text
+PCAP/PCAPNG
+   ↓
+TCP stream reconstruction
+   ↓
+Protocol identification
+   ↓
+STARTTLS / implicit-TLS detection
+   ↓
+TLS handshake + X.509 analysis
+   ↓
+Deterministic risk engine
+   ↓
+Optional ML risk class + anomaly score
+   ↓
+Canonical report model
+   ├── JSON
+   ├── HTML
+   └── PDF
+```
 
-What already runs:
-- `risk_engine` -- fully implemented rule-based scoring (`pytest` covers it)
-- `tls.starttls_detector` -- basic STARTTLS command detection
-- `tls.cipher_suites` -- TLS version / cipher suite reference data
-- `cli.py` -- argument parsing skeleton
-
-What's stubbed (see each file's docstring for the implementation plan):
-- `ingestion` -- PCAP loading, protocol ID, TCP stream reassembly
-- `tls.handshake_parser` -- TLS handshake reconstruction
-- `certificates` -- X.509 extraction and chain validation
-- `ml` -- feature extraction is implemented; classifier/anomaly detector training is not
-- `reporting.pdf_report` -- needs weasyprint's system dependencies (see below)
-- `dashboard` -- FastAPI route skeletons only
+The framework is **passive only**: it never probes or modifies the observed mail service.
 
 ## Setup
 
+Python 3.10+ and TShark are required for PCAP analysis.
+
 ```bash
-python3 -m venv .venv
+python -m venv .venv
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+# Linux/macOS
 source .venv/bin/activate
-pip install -e .
 pip install -r requirements.txt
+pip install -e .
 ```
 
-`pyshark` requires `tshark` to be installed on the host:
-```bash
-# Debian/Ubuntu
-sudo apt install tshark
-# macOS
-brew install wireshark
-```
-
-`weasyprint` (PDF export) requires system Pango/Cairo/GDK-PixBuf libraries --
-see the [weasyprint install docs](https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#installation)
-for your OS. If these can't be installed in your deployment environment,
-`reporting/pdf_report.py` notes `wkhtmltopdf` as a fallback.
+Install Wireshark/TShark separately and ensure `tshark` is available on PATH.
 
 ## Quickstart
 
-```bash
-# Run the test suite (covers the implemented rule engine + STARTTLS detection)
-pytest
+Generate the deterministic demo captures:
 
-# CLI entry point (pipeline wiring is a TODO in cli.py)
-python -m ecforensics.cli analyze --pcap data/sample_pcaps/example.pcap --output-dir out/
+```bash
+python scripts/generate_test_pcaps.py
+```
+
+Run analysis through the canonical CLI:
+
+```bash
+ecforensics analyze --pcap test-captures/mixed_email.pcap --output-dir out \
+  --risk-model models/risk_classifier.joblib \
+  --anomaly-model models/anomaly_detector.joblib
+```
+
+Equivalent compatibility command:
+
+```bash
+python scripts/run_pipeline.py test-captures/mixed_email.pcap \
+  --risk-model models/risk_classifier.joblib \
+  --anomaly-model models/anomaly_detector.joblib \
+  --json out/report.json --html out/report.html --pdf out/report.pdf
+```
+
+Run tests:
+
+```bash
+pytest
+```
+
+## Output semantics
+
+- **Risk score (0–100):** deterministic rule-engine posture score. Lower is worse.
+- **ML risk class:** supervised Random Forest prediction. It is analyst context and does not replace deterministic findings.
+- **ML anomaly score:** Isolation Forest decision score. Lower/more abnormal values are a triage signal, not proof of compromise.
+- **Observability:** an incomplete capture is not automatically classified as plaintext. TLS attempted/expected but not fully observable is retained as such.
+
+## ML training
+
+The repository includes reproducible synthetic training scripts because there is no public labelled dataset specifically representing vulnerable SMTP/IMAP/POP3 TLS sessions. These models are suitable for a prototype/demo and must not be described as trained on real enterprise telemetry.
+
+```bash
+python scripts/train_risk_model.py
+python scripts/train_anomaly_model.py
 ```
 
 ## Project layout
 
-```
+```text
 src/ecforensics/
-  models/        Shared data schema (EmailSession, TLSSession, Certificate, RiskFinding)
-  ingestion/     PCAP loading, protocol identification, TCP stream reassembly
-  tls/           STARTTLS detection, TLS handshake parsing, cipher suite reference data
-  certificates/  X.509 extraction and validation
-  risk_engine/   Rule-based cryptographic weakness detection and scoring
-  ml/            Feature extraction, supervised risk classifier, anomaly detector
-  reporting/     JSON / HTML / PDF report generation
-  dashboard/     FastAPI backend for interactive analysis
-  cli.py         Command-line entry point
-tests/           pytest suite
+  models/        Shared pipeline schema
+  pipeline.py    Canonical end-to-end analysis pipeline
+  ingestion/     PCAP parsing, protocol ID, TCP reconstruction
+  tls/           STARTTLS and TLS handshake analysis
+  certificates/  X.509 extraction and presented-chain validation
+  risk_engine/   Deterministic findings and scoring
+  ml/            Features, supervised classifier, anomaly detector
+  reporting/     Canonical JSON / HTML / PDF exports
+  dashboard/     API/UI integration layer
+  cli.py         Supported command-line entry point
+scripts/         Training, fixture generation and compatibility runner
+tests/           Unit and integration tests
+data/            Certificate fixtures and sample data
 docs/            Architecture and design documentation
-data/            Sample PCAPs and trained model artifacts (gitignored)
 ```
 
-## Known limitations
+## Important passive-analysis limitations
 
-- **TLS 1.3 certificates are not recoverable from passive capture alone**
-  (the Certificate message is encrypted under handshake traffic keys). See
-  `docs/architecture.md` for details and how the report should surface this.
-- **No public labeled dataset exists** for "vulnerable TLS email session"
-  classification. The rule engine is the initial ground truth; see the ML
-  section of `docs/architecture.md` for the training strategy.
+- TLS 1.3 certificate messages are normally encrypted and cannot be recovered from an ordinary passive capture without endpoint key material.
+- Presented-chain validation checks the cryptographic consistency of certificates visible in the capture; it does not by itself prove public-CA trust or the client's expected hostname.
+- If a capture starts or ends mid-session, absence of observed TLS is not equivalent to proof of plaintext.
+- ML scores depend on the quality and representativeness of the training baseline.
