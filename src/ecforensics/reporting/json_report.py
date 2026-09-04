@@ -1,7 +1,4 @@
-"""
-JSON forensic report export.
-"""
-
+"""Canonical JSON report export."""
 from __future__ import annotations
 
 import json
@@ -10,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ecforensics.models.session import EmailSession
+from ecforensics.reporting.html_report import build_summary
 
 
 def _json_default(obj):
@@ -19,19 +17,14 @@ def _json_default(obj):
 
 
 def generate_json_report(sessions: list[EmailSession], output_path: str | Path) -> Path:
-    """
-    Serialize all assessed sessions to a single JSON report.
-
-    TODO: add a report-level summary block above the per-session detail --
-    total sessions, count by severity, top finding categories -- since that
-    summary is what most downstream consumers (dashboards, SIEM ingestion)
-    will actually read first.
-    """
     output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(sessions, key=lambda s: (-(s.risk_score or 0), s.session_id))
     data = {
+        "tool": "SecureMailScope",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "session_count": len(sessions),
-        "sessions": [asdict(s) for s in sessions],
+        "summary": build_summary(ordered),
+        "sessions": [asdict(s) for s in ordered],
     }
-    output_path.write_text(json.dumps(data, indent=2, default=_json_default))
+    output_path.write_text(json.dumps(data, indent=2, default=_json_default), encoding="utf-8")
     return output_path
