@@ -1,4 +1,4 @@
-"""PCAP -> reconstructed email sessions -> rules -> ML -> JSON/HTML report."""
+"""PCAP -> reconstructed email sessions -> rules -> ML -> JSON/HTML/PDF report."""
 from __future__ import annotations
 
 import argparse
@@ -117,25 +117,68 @@ def write_json_report(sessions: list[EmailSession], path: str | Path) -> None:
     path.write_text(json.dumps(payload, default=_json_default, indent=2), encoding="utf-8")
 
 
-def write_html_report(sessions: list[EmailSession], path: str | Path) -> None:
-    path = Path(path)
+def _html_report_document(sessions: list[EmailSession]) -> str:
+    """Build the HTML document used for both browser viewing and PDF output."""
+    from html import escape
+
     rows = []
     for s in sorted(sessions, key=lambda x: x.risk_score or 0, reverse=True):
-        findings = "".join(f"<li><b>{f.rule_id}</b> [{f.severity.value}] {f.description}</li>" for f in s.findings)
+        finding_items = []
+        for f in s.findings:
+            finding_items.append(
+                f"<li><b>{escape(f.rule_id)}</b> [{escape(f.severity.value)}] "
+                f"{escape(f.description)}</li>"
+            )
+        findings = "".join(finding_items) or "<li>None</li>"
+        anomaly = "" if s.ml_anomaly_score is None else f"{s.ml_anomaly_score:.4f}"
         rows.append(
-            f"<tr><td>{s.session_id}</td><td>{s.protocol.value}</td><td>{s.src_ip}:{s.src_port}</td>"
-            f"<td>{s.dst_ip}:{s.dst_port}</td><td>{overall_severity(s).value}</td><td>{s.risk_score}</td>"
-            f"<td>{'' if s.ml_anomaly_score is None else f'{s.ml_anomaly_score:.4f}'}</td>"
-            f"<td><ul>{findings or '<li>None</li>'}</ul></td></tr>"
+            f"<tr><td>{escape(s.session_id)}</td><td>{escape(s.protocol.value)}</td>"
+            f"<td>{escape(str(s.src_ip))}:{s.src_port}</td>"
+            f"<td>{escape(str(s.dst_ip))}:{s.dst_port}</td>"
+            f"<td>{escape(overall_severity(s).value)}</td><td>{s.risk_score}</td>"
+            f"<td>{escape(anomaly)}</td><td><ul>{findings}</ul></td></tr>"
         )
-    html = """<!doctype html><html><head><meta charset='utf-8'><title>SecureMailScope Report</title>
-<style>body{font-family:system-ui,sans-serif;margin:2rem}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:.55rem;text-align:left;vertical-align:top}th{background:#f3f3f3}ul{margin:0;padding-left:1.2rem}</style></head>
+
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return """<!doctype html>
+<html><head><meta charset='utf-8'><title>SecureMailScope Report</title>
+<style>
+@page { size: A4 landscape; margin: 12mm; }
+body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 2rem; color: #111; }
+h1 { margin-bottom: .35rem; }
+.meta { color: #555; margin-bottom: 1.25rem; }
+table { border-collapse: collapse; width: 100%; font-size: 10pt; }
+th, td { border: 1px solid #ccc; padding: .5rem; text-align: left; vertical-align: top; }
+th { background: #f3f3f3; }
+ul { margin: 0; padding-left: 1.1rem; }
+li { margin-bottom: .25rem; }
+</style></head>
 <body><h1>SecureMailScope — Cryptographic Security Posture</h1>
-<p>Passive PCAP analysis. Sessions are sorted worst-risk first.</p>
+<p class='meta'>Passive PCAP analysis. Sessions are sorted worst-risk first. Generated: """ + generated + """</p>
 <table><thead><tr><th>Session</th><th>Protocol</th><th>Source</th><th>Destination</th><th>Severity</th><th>Risk</th><th>ML anomaly</th><th>Findings</th></tr></thead>
 <tbody>""" + "".join(rows) + "</tbody></table></body></html>"
+
+
+def write_html_report(sessions: list[EmailSession], path: str | Path) -> None:
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(html, encoding="utf-8")
+    path.write_text(_html_report_document(sessions), encoding="utf-8")
+
+
+def write_pdf_report(sessions: list[EmailSession], path: str | Path) -> None:
+    """Render the same HTML report to a PDF using WeasyPrint."""
+    try:
+        from weasyprint import HTML
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "PDF reporting requires WeasyPrint. Install dependencies with "
+            "'pip install -r requirements.txt' and see README setup notes if "
+            "Windows Pango/Cairo libraries are missing."
+        ) from exc
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    HTML(string=_html_report_document(sessions), base_url=str(Path.cwd())).write_pdf(str(path))
 
 
 def main() -> int:
@@ -146,12 +189,15 @@ def main() -> int:
     parser.add_argument("--contamination", type=float, default=0.05)
     parser.add_argument("--json", type=Path, help="write JSON report")
     parser.add_argument("--html", type=Path, help="write HTML report")
+    parser.add_argument("--pdf", type=Path, help="write PDF report rendered from the HTML report")
     args = parser.parse_args()
     sessions = run(args.pcap, args.risk_model, args.anomaly_model, args.contamination)
     if args.json:
         write_json_report(sessions, args.json)
     if args.html:
         write_html_report(sessions, args.html)
+    if args.pdf:
+        write_pdf_report(sessions, args.pdf)
     for s in sessions:
         print(f"{s.session_id} {s.protocol.value} {s.src_ip}:{s.src_port} -> {s.dst_ip}:{s.dst_port}")
         print(f"  severity={overall_severity(s).value} risk_score={s.risk_score} anomaly={s.ml_anomaly_score}")
