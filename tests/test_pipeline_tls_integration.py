@@ -34,59 +34,25 @@ def _checksum(data: bytes) -> int:
 
 def _tcp_packet(src_ip: str, dst_ip: str, src_port: int, dst_port: int, seq: int, ack: int, flags: int, payload: bytes = b"") -> bytes:
     tcp_header = struct.pack(
-        "!HHIIHHHH",
-        src_port,
-        dst_port,
-        seq,
-        ack,
-        (5 << 12) | flags,
-        65535,
-        0,
-        0,
+        "!HHIIHHHH", src_port, dst_port, seq, ack, (5 << 12) | flags, 65535, 0, 0
     )
     pseudo = _ip_bytes(src_ip) + _ip_bytes(dst_ip) + struct.pack("!BBH", 0, 6, len(tcp_header) + len(payload))
     tcp_checksum = _checksum(pseudo + tcp_header + payload)
     tcp_header = struct.pack(
-        "!HHIIHHHH",
-        src_port,
-        dst_port,
-        seq,
-        ack,
-        (5 << 12) | flags,
-        65535,
-        tcp_checksum,
-        0,
+        "!HHIIHHHH", src_port, dst_port, seq, ack, (5 << 12) | flags, 65535, tcp_checksum, 0
     )
     return _ipv4_packet(src_ip, dst_ip, 6, tcp_header + payload)
 
 
 def _ipv4_packet(src_ip: str, dst_ip: str, protocol: int, payload: bytes) -> bytes:
     header = struct.pack(
-        "!BBHHHBBH4s4s",
-        0x45,
-        0,
-        20 + len(payload),
-        0,
-        0x4000,
-        64,
-        protocol,
-        0,
-        _ip_bytes(src_ip),
-        _ip_bytes(dst_ip),
+        "!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), 0, 0x4000, 64, protocol, 0,
+        _ip_bytes(src_ip), _ip_bytes(dst_ip)
     )
     checksum = _checksum(header)
     header = struct.pack(
-        "!BBHHHBBH4s4s",
-        0x45,
-        0,
-        20 + len(payload),
-        0,
-        0x4000,
-        64,
-        protocol,
-        checksum,
-        _ip_bytes(src_ip),
-        _ip_bytes(dst_ip),
+        "!BBHHHBBH4s4s", 0x45, 0, 20 + len(payload), 0, 0x4000, 64, protocol, checksum,
+        _ip_bytes(src_ip), _ip_bytes(dst_ip)
     )
     return header + payload
 
@@ -103,15 +69,7 @@ def _client_hello() -> bytes:
     server_name = b"mail.example.test"
     sni_body = b"\x00" + (len(server_name) + 3).to_bytes(2, "big") + b"\x00" + len(server_name).to_bytes(2, "big") + server_name
     extension = b"\x00\x00" + len(sni_body).to_bytes(2, "big") + sni_body
-    body = (
-        b"\x03\x03"
-        + bytes(range(32))
-        + b"\x00"
-        + b"\x00\x02\xc0\x2f"
-        + b"\x01\x00"
-        + len(extension).to_bytes(2, "big")
-        + extension
-    )
+    body = b"\x03\x03" + bytes(range(32)) + b"\x00" + b"\x00\x02\xc0\x2f" + b"\x01\x00" + len(extension).to_bytes(2, "big") + extension
     return b"\x01" + len(body).to_bytes(3, "big") + body
 
 
@@ -128,19 +86,22 @@ def _write_pcap(path: Path) -> None:
     def add(time: float, src: str, dst: str, sport: int, dport: int, seq: int, ack: int, flags: int, payload: bytes = b"") -> None:
         packets.append((time, _ethernet_frame(_tcp_packet(src, dst, sport, dport, seq, ack, flags, payload))))
 
+    # SYN consumes one sequence number in each direction.
     add(1.000, CLIENT_IP, SERVER_IP, CLIENT_PORT, SERVER_PORT, client_seq, 0, 0x02)
     add(1.001, SERVER_IP, CLIENT_IP, SERVER_PORT, CLIENT_PORT, server_seq, client_seq + 1, 0x12)
     add(1.002, CLIENT_IP, SERVER_IP, CLIENT_PORT, SERVER_PORT, client_seq + 1, server_seq + 1, 0x10)
+    client_seq += 1
+    server_seq += 1
 
     banner = b"220 mail.example.test ESMTP SecureMailScope\r\n"
-    add(1.010, SERVER_IP, CLIENT_IP, SERVER_PORT, CLIENT_PORT, server_seq + 1, client_seq + 1, 0x18, banner)
+    add(1.010, SERVER_IP, CLIENT_IP, SERVER_PORT, CLIENT_PORT, server_seq, client_seq, 0x18, banner)
     server_seq += len(banner)
 
     ehlo = b"EHLO client.example.test\r\n"
-    add(1.020, CLIENT_IP, SERVER_IP, CLIENT_PORT, SERVER_PORT, client_seq + 1, server_seq, 0x18, ehlo)
+    add(1.020, CLIENT_IP, SERVER_IP, CLIENT_PORT, SERVER_PORT, client_seq, server_seq, 0x18, ehlo)
     client_seq += len(ehlo)
     ehlo_reply = b"250-mail.example.test\r\n250-STARTTLS\r\n250 OK\r\n"
-    add(1.021, SERVER_IP, CLIENT_IP, SERVER_PORT, CLIENT_PORT, server_seq, client_seq + 1, 0x18, ehlo_reply)
+    add(1.021, SERVER_IP, CLIENT_IP, SERVER_PORT, CLIENT_PORT, server_seq, client_seq, 0x18, ehlo_reply)
     server_seq += len(ehlo_reply)
 
     command = b"STARTTLS\r\n"
