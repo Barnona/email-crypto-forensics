@@ -45,30 +45,21 @@ class Certificate:
     signature_algorithm: str
     is_self_signed: bool = False
     is_expired: bool = False
-    chain_valid: Optional[bool] = None  # None until validated against a trust store
+    chain_valid: Optional[bool] = None
     raw_der: Optional[bytes] = field(default=None, repr=False)
-
-    # TODO(certificates/validator.py): populate is_expired / chain_valid via
-    # cryptography.x509 + a trust store (certifi) at validation time.
 
 
 @dataclass
 class TLSSession:
     """Everything learned from parsing a single TLS handshake."""
 
-    tls_version: str                 # e.g. "TLSv1.2", "TLSv1.0", "SSLv3"
-    cipher_suite: str                # e.g. "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+    tls_version: str
+    cipher_suite: str
     key_exchange: Optional[str] = None
     forward_secrecy: bool = False
     sni_hostname: Optional[str] = None
     certificates: list[Certificate] = field(default_factory=list)
     handshake_duration_ms: Optional[float] = None
-
-    # TODO(tls/handshake_parser.py): populate from the parsed ClientHello/
-    # ServerHello/Certificate handshake messages. Note: for TLS 1.3 sessions,
-    # `certificates` will be empty unless SSLKEYLOGFILE was captured alongside
-    # the PCAP -- the Certificate message is encrypted in 1.3. Document this
-    # as a known limitation rather than silently under-reporting.
 
 
 @dataclass
@@ -77,10 +68,10 @@ class RiskFinding:
 
     rule_id: str
     severity: Severity
-    category: str            # e.g. "TLS_VERSION", "CIPHER_SUITE", "CERTIFICATE"
+    category: str
     description: str
     recommendation: str
-    source: str = "rule"     # "rule" or "ml"
+    source: str = "rule"
 
 
 @dataclass
@@ -99,14 +90,10 @@ class EmailSession:
     starttls_used: bool = False
     tls_session: Optional[TLSSession] = None
     findings: list[RiskFinding] = field(default_factory=list)
-    risk_score: Optional[float] = None        # 0-100, from risk_engine.scorer
-    ml_anomaly_score: Optional[float] = None  # from ml.anomaly_detector
+    risk_score: Optional[float] = None
+    ml_risk_class: Optional[str] = None
+    ml_anomaly_score: Optional[float] = None
 
     @property
     def is_encrypted(self) -> bool:
         return self.tls_session is not None
-
-    # TODO: add to_dict()/from_dict() helpers once the reporting layer's exact
-    # JSON schema is finalized (reporting/json_report.py currently uses
-    # dataclasses.asdict() directly, which is fine until this needs custom
-    # serialization logic beyond datetime handling).
