@@ -15,11 +15,6 @@ class StartTLSResult:
     server_accepted: Optional[bool] = None
 
 
-def _contains_command(stream: bytes, marker: bytes) -> int:
-    upper = stream.upper()
-    return upper.find(marker)
-
-
 def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_client: bytes) -> StartTLSResult:
     marker = {EmailProtocol.SMTP: b"STARTTLS", EmailProtocol.IMAP: b"STARTTLS", EmailProtocol.POP3: b"STLS"}.get(protocol)
     if marker is None:
@@ -28,18 +23,18 @@ def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_
     server = server_to_client.upper()
     client = client_to_server.upper()
     offered = marker in server
-    command_offset = _contains_command(client, marker)
+    command_offset = client.find(marker)
     if command_offset < 0:
         return StartTLSResult(offered, False, None, None)
 
-    # SMTP 220, IMAP tagged OK, and POP3 +OK are the usual positive replies.
-    # We deliberately do not claim negotiation merely because the command was sent.
-    accepted = False
+    # A command alone is not negotiation. Look for protocol-specific positive
+    # responses. We intentionally report False when the capture does not expose
+    # a positive reply; callers can then preserve the distinction as unobserved.
     if protocol is EmailProtocol.SMTP:
-        accepted = b"220" in server[server.find(marker):] if marker in server else b"220" in server
+        accepted = b"220" in server and (b"READY" in server or b"START TLS" in server or b"GO AHEAD" in server)
     elif protocol is EmailProtocol.IMAP:
-        accepted = b" OK" in server or server.startswith(b"OK")
-    elif protocol is EmailProtocol.POP3:
-        accepted = b"+OK" in server
+        accepted = b" OK" in server and b"STARTTLS" in client
+    else:  # POP3
+        accepted = b"+OK" in server and b"STLS" in client
 
     return StartTLSResult(offered, accepted, command_offset if accepted else None, accepted)
