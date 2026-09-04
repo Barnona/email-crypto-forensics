@@ -54,11 +54,12 @@ def test_parser_reconstructs_tls12_session():
             if "tls.handshake.extensions_key_share_group" in _fields:
                 return [["29"]]
             return [["0x0303", "", "0xC02F"]]
-        if "tls.handshake.type==11" in display_filter:
-            return []
         return []
 
-    with patch("ecforensics.tls.handshake_parser._tshark_fields", side_effect=fake_fields):
+    with (
+        patch("ecforensics.tls.handshake_parser._tshark_fields", side_effect=fake_fields),
+        patch("ecforensics.tls.handshake_parser.extract_der_certificates_from_pcap", return_value=[]),
+    ):
         session = TLSHandshakeParser().parse("capture.pcap", "0")
 
     assert session is not None
@@ -67,6 +68,7 @@ def test_parser_reconstructs_tls12_session():
     assert session.key_exchange == "x25519"
     assert session.forward_secrecy is True
     assert session.sni_hostname == "mail.example.test"
+    assert session.certificates == []
 
 
 def test_parser_reconstructs_tls13_from_supported_versions():
