@@ -101,6 +101,11 @@ def _reassemble_direction(chunks: list[tuple[int, bytes]]) -> tuple[bytes, bool]
     return bytes(assembled), has_gap
 
 
+def _tshark_flag_is_set(value: str) -> bool:
+    """Accept the boolean spellings emitted by supported TShark versions."""
+    return value.strip().lower() in {"1", "true"}
+
+
 def _stream_packets(pcap_path: str | Path, stream_id: str) -> list[dict]:
     """Extract packet metadata needed for deterministic TCP reassembly."""
     output = _run_tshark([
@@ -132,7 +137,8 @@ def _stream_packets(pcap_path: str | Path, stream_id: str) -> list[dict]:
         packets.append({
             "time": time, "src": src, "src_port": src_port,
             "seq": seq, "tcp_len": tcp_len, "payload": payload,
-            "fin": parts[7] == "1", "reset": parts[8] == "1",
+            "fin": _tshark_flag_is_set(parts[7]),
+            "reset": _tshark_flag_is_set(parts[8]),
         })
     return packets
 
