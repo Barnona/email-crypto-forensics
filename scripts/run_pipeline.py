@@ -60,6 +60,7 @@ def apply_ml(sessions: list[EmailSession], risk_model_path: str | Path | None = 
     if risk_model_path:
         classifier = MLRiskClassifier(risk_model_path)
         for session, prediction in zip(sessions, classifier.predict(features)):
+            session.ml_risk_class = str(prediction)
             session.findings.append(RiskFinding(
                 rule_id="ML-RISK-001", severity=Severity.INFO, category="ML_RISK",
                 description=f"Supervised ML risk classification: {prediction}.",
@@ -135,12 +136,13 @@ def _html_report_document(sessions: list[EmailSession]) -> str:
             )
         findings = "".join(finding_items) or "<li>None</li>"
         anomaly = "" if s.ml_anomaly_score is None else f"{s.ml_anomaly_score:.4f}"
+        ml_class = escape(s.ml_risk_class) if s.ml_risk_class else "—"
         rows.append(
             f"<tr><td>{escape(s.session_id)}</td><td>{escape(s.protocol.value)}</td>"
             f"<td>{escape(str(s.src_ip))}:{s.src_port}</td>"
             f"<td>{escape(str(s.dst_ip))}:{s.dst_port}</td>"
             f"<td>{escape(overall_severity(s).value)}</td><td>{s.risk_score}</td>"
-            f"<td>{escape(anomaly)}</td><td><ul>{findings}</ul></td></tr>"
+            f"<td>{ml_class}</td><td>{escape(anomaly)}</td><td><ul>{findings}</ul></td></tr>"
         )
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -159,7 +161,7 @@ li { margin-bottom: .25rem; }
 </style></head>
 <body><h1>SecureMailScope — Cryptographic Security Posture</h1>
 <p class='meta'>Passive PCAP analysis. Sessions are sorted worst-risk first. Generated: """ + generated + """</p>
-<table><thead><tr><th>Session</th><th>Protocol</th><th>Source</th><th>Destination</th><th>Severity</th><th>Risk</th><th>ML anomaly</th><th>Findings</th></tr></thead>
+<table><thead><tr><th>Session</th><th>Protocol</th><th>Source</th><th>Destination</th><th>Severity</th><th>Risk score</th><th>ML risk class</th><th>ML anomaly</th><th>Findings</th></tr></thead>
 <tbody>""" + "".join(rows) + "</tbody></table></body></html>"
 
 
@@ -172,10 +174,7 @@ def write_html_report(sessions: list[EmailSession], path: str | Path) -> None:
 def _find_browser() -> str | None:
     """Find a Chromium-based browser that supports headless PDF printing on Windows."""
     candidates = [
-        shutil.which("msedge"),
-        shutil.which("msedge.exe"),
-        shutil.which("chrome"),
-        shutil.which("chrome.exe"),
+        shutil.which("msedge"), shutil.which("msedge.exe"), shutil.which("chrome"), shutil.which("chrome.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
@@ -194,34 +193,20 @@ def _write_pdf_with_browser(html: str, path: Path) -> bool:
     browser = _find_browser()
     if browser is None:
         return False
-
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="securemailscope-") as temp_dir:
         html_path = Path(temp_dir) / "report.html"
         html_path.write_text(html, encoding="utf-8")
-        command = [
-            browser,
-            "--headless=new",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
-            f"--print-to-pdf={path.resolve()}",
-            html_path.resolve().as_uri(),
-        ]
+        command = [browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                   f"--print-to-pdf={path.resolve()}", html_path.resolve().as_uri()]
         result = subprocess.run(command, capture_output=True, text=True, timeout=60)
         return result.returncode == 0 and path.is_file() and path.stat().st_size > 0
 
 
 def write_pdf_report(sessions: list[EmailSession], path: str | Path) -> None:
-    """Render the HTML report to PDF.
-
-    WeasyPrint is preferred. On Windows, if its native Pango/GObject DLLs are
-    unavailable, fall back to an installed Microsoft Edge/Chrome headless
-    browser so PDF reporting still works without requiring MSYS2.
-    """
+    """Render the HTML report to PDF, preferring WeasyPrint and falling back to Edge/Chrome."""
     path = Path(path)
     html = _html_report_document(sessions)
-
     try:
         from weasyprint import HTML
     except (ImportError, OSError) as exc:
@@ -229,12 +214,9 @@ def write_pdf_report(sessions: list[EmailSession], path: str | Path) -> None:
             print("PDF report generated using the installed Chromium-based browser (WeasyPrint native libraries unavailable).")
             return
         raise RuntimeError(
-            "Could not generate PDF. WeasyPrint is installed but its native Pango/GObject "
-            "libraries are unavailable, and no usable Edge/Chrome installation was found. "
-            "On Windows, install MSYS2 and run 'pacman -S mingw-w64-ucrt-x86_64-pango', "
-            "or install Microsoft Edge/Chrome and rerun the command."
+            "Could not generate PDF. WeasyPrint is installed but its native Pango/GObject libraries are unavailable, "
+            "and no usable Edge/Chrome installation was found."
         ) from exc
-
     path.parent.mkdir(parents=True, exist_ok=True)
     HTML(string=html, base_url=str(Path.cwd())).write_pdf(str(path))
 
@@ -250,15 +232,12 @@ def main() -> int:
     parser.add_argument("--pdf", type=Path, help="write PDF report rendered from the HTML report")
     args = parser.parse_args()
     sessions = run(args.pcap, args.risk_model, args.anomaly_model, args.contamination)
-    if args.json:
-        write_json_report(sessions, args.json)
-    if args.html:
-        write_html_report(sessions, args.html)
-    if args.pdf:
-        write_pdf_report(sessions, args.pdf)
+    if args.json: write_json_report(sessions, args.json)
+    if args.html: write_html_report(sessions, args.html)
+    if args.pdf: write_pdf_report(sessions, args.pdf)
     for s in sessions:
         print(f"{s.session_id} {s.protocol.value} {s.src_ip}:{s.src_port} -> {s.dst_ip}:{s.dst_port}")
-        print(f"  severity={overall_severity(s).value} risk_score={s.risk_score} anomaly={s.ml_anomaly_score}")
+        print(f"  severity={overall_severity(s).value} risk_score={s.risk_score} ml_risk_class={s.ml_risk_class} anomaly={s.ml_anomaly_score}")
         for f in s.findings:
             print(f"  [{f.rule_id}] ({f.source}) {f.description}")
     return 0
