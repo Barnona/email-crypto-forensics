@@ -1,13 +1,14 @@
 """Train and persist the SecureMailScope unsupervised anomaly baseline.
 
-This script deliberately builds a small synthetic *baseline* population rather
-than training on the PCAP being analysed. The resulting Isolation Forest is a
+This script builds a small synthetic *baseline* population rather than
+training on the PCAP being analysed. The resulting Isolation Forest is a
 demo/development baseline and must be retrained with representative enterprise
 captures before production use.
 """
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ecforensics.ml.anomaly_detector import TLSAnomalyDetector
@@ -20,9 +21,9 @@ def _certificate(key_size_bits: int = 2048) -> Certificate:
         subject="CN=mail.example.test",
         issuer="CN=Example Test CA",
         serial_number="1001",
-        not_before="2026-01-01T00:00:00+00:00",
-        not_after="2030-01-01T00:00:00+00:00",
-        key_type="RSA",
+        not_before=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        not_after=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        public_key_algorithm="RSA",
         key_size_bits=key_size_bits,
         signature_algorithm="sha256WithRSAEncryption",
         is_self_signed=False,
@@ -40,16 +41,16 @@ def _baseline_session(protocol: EmailProtocol, index: int) -> EmailSession:
         src_port=40000 + index,
         dst_ip="198.51.100.10",
         dst_port={EmailProtocol.SMTP: 25, EmailProtocol.IMAP: 143, EmailProtocol.POP3: 110}[protocol],
-        start_time="2026-01-01T00:00:00+00:00",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
     session.starttls_offered = True
     session.starttls_used = True
     session.tls_session = TLSSession(
         tls_version="TLSv1.3",
         cipher_suite="TLS_AES_128_GCM_SHA256",
-        server_name="mail.example.test",
         forward_secrecy=True,
-        key_exchange_group="x25519",
+        sni_hostname="mail.example.test",
+        key_exchange="x25519",
         handshake_duration_ms=30.0 + (index % 8) * 4.0,
         certificates=[_certificate()],
     )
