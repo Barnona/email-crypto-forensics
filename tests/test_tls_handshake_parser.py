@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from ecforensics.tls.handshake_parser import TLSHandshakeParser, _resolve_negotiated_version
+from ecforensics.tls.handshake_parser import (
+    TLSHandshakeParser,
+    _extract_sni_from_client_hello,
+    _resolve_negotiated_version,
+)
 
 
 def test_resolve_tls12_from_server_hello_legacy_version():
@@ -15,6 +19,17 @@ def test_resolve_tls13_from_supported_versions_extension():
 
 def test_resolve_unknown_version_without_server_hello():
     assert _resolve_negotiated_version([], None) == "unknown"
+
+
+def test_extract_sni_from_client_hello_payload():
+    name = b"mail.example.test"
+    sni_body = b"\x00" + (len(name) + 3).to_bytes(2, "big") + b"\x00" + len(name).to_bytes(2, "big") + name
+    extension = b"\x00\x00" + len(sni_body).to_bytes(2, "big") + sni_body
+    body = b"\x03\x03" + bytes(range(32)) + b"\x00" + b"\x00\x02\xc0\x2f" + b"\x01\x00" + len(extension).to_bytes(2, "big") + extension
+    handshake = b"\x01" + len(body).to_bytes(3, "big") + body
+    record = b"\x16\x03\x03" + len(handshake).to_bytes(2, "big") + handshake
+
+    assert _extract_sni_from_client_hello([record.hex()]) == "mail.example.test"
 
 
 def test_parser_requires_clienthello_and_serverhello():
