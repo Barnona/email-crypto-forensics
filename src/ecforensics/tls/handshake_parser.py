@@ -44,7 +44,7 @@ _LEGACY_VERSION_NAMES = {
     "0x0301": "TLSv1.0",
     "0x0302": "TLSv1.1",
     "0x0303": "TLSv1.2",
-    "0x0304": "TLSv1.3",  # appears as record version in some 1.3 middlebox-compat modes
+    "0x0304": "TLSv1.3",
 }
 
 # key_share group codepoints relevant to forward secrecy / PQC readiness.
@@ -75,10 +75,7 @@ def _tshark_fields(pcap_path: str | Path, display_filter: str, fields: list[str]
 
 
 def _first_value(field_value: str) -> str:
-    """tshark can return multiple comma-separated values when several TLS
-    records land in one frame (e.g. ServerHello + Certificate + ServerHelloDone
-    coalesced into one TCP segment). The first value corresponds to the first
-    record, which is what we want for record-layer version detection."""
+    """Return the first value when tshark reports a multi-valued field."""
     return field_value.split(",")[0] if field_value else field_value
 
 
@@ -90,7 +87,6 @@ def _resolve_negotiated_version(client_hello_row: list[str], server_hello_row: O
     when present; fall back to the legacy field for TLS 1.2 and earlier.
     """
     if server_hello_row and len(server_hello_row) > 1 and server_hello_row[1]:
-        # server_hello_row[1] is tls.handshake.extensions.supported_version
         return _LEGACY_VERSION_NAMES.get(_first_value(server_hello_row[1]).lower(), server_hello_row[1])
     if server_hello_row and server_hello_row[0]:
         return _LEGACY_VERSION_NAMES.get(_first_value(server_hello_row[0]).lower(), server_hello_row[0])
@@ -100,6 +96,10 @@ def _resolve_negotiated_version(client_hello_row: list[str], server_hello_row: O
 class TLSHandshakeParser:
     """
     Parses a TLS handshake within one tcp.stream of a PCAP into a TLSSession.
+
+    A reconstructed TLS session requires both a ClientHello and ServerHello.
+    Seeing only a ServerHello is treated as an incomplete/partially captured
+    handshake rather than a successful reconstruction.
 
     Unlike stream_reassembly.py (which reassembles raw bytes generically),
     this operates directly on (pcap_path, stream_id) rather than raw bytes --
@@ -114,11 +114,11 @@ class TLSHandshakeParser:
 
         client_hello_rows = _tshark_fields(
             pcap_path, f"{filt} && tls.handshake.type==1",
-            ["tls.handshake.extensions_server_name"],
+            ["frame.time_epoch", "tls.handshake.extensions_server_name"],
         )
         server_hello_rows = _tshark_fields(
             pcap_path, f"{filt} && tls.handshake.type==2",
-            ["tls.record.version", "tls.handshake.extensions.supported_version",
+            ["frame.time_epoch", "tls.record.version", "tls.handshake.extensions.supported_version",
              "tls.handshake.ciphersuite"],
         )
         cert_rows = _tshark_fields(
@@ -130,14 +130,21 @@ class TLSHandshakeParser:
             ["tls.handshake.extensions_key_share_group"],
         )
 
-        if not server_hello_rows:
-            return None  # no ServerHello seen in this stream -- handshake incomplete or absent
+        # A ServerHello without a ClientHello is not enough to reconstruct a
+        # TLS session reliably: the capture may have started mid-handshake.
+        if not client_hello_rows or not server_hello_rows:
+            return None
 
+        ch = client_hello_rows[0]
         sh = server_hello_rows[0]
-        record_version, supported_version_ext, cipher_hex = (sh + ["", "", ""])[:3]
+        client_time = ch[0] if ch else ""
+        server_time = sh[0] if sh else ""
+        record_version = sh[1] if len(sh) > 1 else ""
+        supported_version_ext = sh[2] if len(sh) > 2 else ""
+        cipher_hex = sh[3] if len(sh) > 3 else ""
 
         version = _resolve_negotiated_version(
-            client_hello_rows[0] if client_hello_rows else [],
+            ch[1:] if len(ch) > 1 else [],
             [record_version, supported_version_ext],
         )
 
@@ -150,25 +157,28 @@ class TLSHandshakeParser:
                 cipher_suite = cipher_hex
 
         sni = None
-        if client_hello_rows and client_hello_rows[0] and client_hello_rows[0][0]:
-            sni = client_hello_rows[0][0]
+        if len(ch) > 1 and ch[1]:
+            sni = _first_value(ch[1])
 
         key_exchange_group = None
         if key_share_rows and key_share_rows[0] and key_share_rows[0][0]:
             try:
-                group_code = int(key_share_rows[0][0])
+                group_code = int(_first_value(key_share_rows[0][0]))
                 key_exchange_group = _KEY_SHARE_GROUP_NAMES.get(group_code, str(group_code))
             except ValueError:
                 pass
 
-        # Forward secrecy: ECDHE/DHE in the cipher suite name (TLS <=1.2), or
-        # any negotiated TLS 1.3 cipher suite (1.3 is *always* (EC)DHE -- the
-        # cipher suite name alone doesn't encode key exchange in 1.3).
         forward_secrecy = (
             version == "TLSv1.3"
             or "ECDHE" in cipher_suite
             or "DHE" in cipher_suite
         )
+
+        handshake_duration_ms = None
+        try:
+            handshake_duration_ms = max(0.0, (float(server_time) - float(client_time)) * 1000.0)
+        except (TypeError, ValueError):
+            pass
 
         certificates = []
         if version != "TLSv1.3":
@@ -180,10 +190,6 @@ class TLSHandshakeParser:
                 try:
                     certificates.append(parse_certificate(der))
                 except Exception:
-                    # A cert we can't parse shouldn't take down the whole
-                    # session assessment -- skip it rather than raise, so
-                    # one malformed/unusual cert doesn't lose every other
-                    # finding for this session.
                     continue
 
         return TLSSession(
@@ -193,4 +199,5 @@ class TLSHandshakeParser:
             forward_secrecy=forward_secrecy,
             sni_hostname=sni,
             certificates=certificates,
+            handshake_duration_ms=handshake_duration_ms,
         )
