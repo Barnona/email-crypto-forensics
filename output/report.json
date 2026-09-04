@@ -1,6 +1,6 @@
 {
   "tool": "SecureMailScope",
-  "generated_at": "2026-09-04T17:31:31.190383+00:00",
+  "generated_at": "2026-09-04T17:47:40.864426+00:00",
   "summary": {
     "total_sessions": 1,
     "severity_counts": {
@@ -24,11 +24,11 @@
       "end_time": "2026-09-04T17:20:11.258160+00:00",
       "capture_complete": false,
       "starttls_offered": true,
-      "starttls_used": true,
+      "starttls_used": false,
       "tls_attempted": true,
       "tls_session": null,
       "analysis_notes": [
-        "TLS was attempted/expected, but no complete ServerHello was observable in this capture."
+        "STARTTLS was accepted, but no TLS ClientHello was observable after the upgrade point."
       ],
       "findings": [],
       "risk_score": 100,
