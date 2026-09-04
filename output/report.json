@@ -1,0 +1,39 @@
+{
+  "tool": "SecureMailScope",
+  "generated_at": "2026-09-04T17:23:38.821268+00:00",
+  "summary": {
+    "total_sessions": 1,
+    "severity_counts": {
+      "INFO": 1,
+      "LOW": 0,
+      "MEDIUM": 0,
+      "HIGH": 0,
+      "CRITICAL": 0
+    },
+    "finding_categories": {}
+  },
+  "sessions": [
+    {
+      "session_id": "pcap-stream-0",
+      "protocol": "SMTP",
+      "src_ip": "192.0.2.10",
+      "src_port": 49152,
+      "dst_ip": "192.0.2.20",
+      "dst_port": 25,
+      "start_time": "2026-09-04T17:20:11.243160+00:00",
+      "end_time": "2026-09-04T17:20:11.258160+00:00",
+      "capture_complete": false,
+      "starttls_offered": true,
+      "starttls_used": true,
+      "tls_attempted": true,
+      "tls_session": null,
+      "analysis_notes": [
+        "TLS was attempted/expected, but no complete ServerHello was observable in this capture."
+      ],
+      "findings": [],
+      "risk_score": 100,
+      "ml_risk_class": null,
+      "ml_anomaly_score": null
+    }
+  ]
+}

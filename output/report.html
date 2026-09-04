@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SecureMailScope Cryptographic Security Posture</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+h1 { margin-bottom: .25rem; }
+.meta { color: #666; }
+.summary { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+.card { border: 1px solid #ddd; padding: .75rem 1rem; min-width: 100px; }
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+th, td { border: 1px solid #ddd; padding: 7px 9px; font-size: .84rem; text-align: left; vertical-align: top; }
+th { background: #f4f4f4; }
+.findings { margin: 0; padding-left: 1.1rem; }
+</style>
+</head>
+<body>
+<h1>SecureMailScope — Cryptographic Security Posture</h1>
+<p class="meta">Passive PCAP analysis. Sessions are sorted worst-risk first.</p>
+<div class="summary">
+  <div class="card"><strong>Total</strong><br>1</div>
+  <div class="card"><strong>INFO</strong><br>1</div><div class="card"><strong>LOW</strong><br>0</div><div class="card"><strong>MEDIUM</strong><br>0</div><div class="card"><strong>HIGH</strong><br>0</div><div class="card"><strong>CRITICAL</strong><br>0</div>
+</div>
+<table>
+<thead><tr><th>Session</th><th>Protocol</th><th>Source → Destination</th><th>TLS</th><th>Severity</th><th>Risk</th><th>ML risk</th><th>Anomaly</th><th>Findings</th></tr></thead>
+<tbody>
+
+<tr>
+<td>pcap-stream-0</td><td>SMTP</td>
+<td>192.0.2.10:49152 → 192.0.2.20:25</td>
+<td>TLS attempted; details unobserved</td>
+<td>INFO</td><td>100</td><td>—</td>
+<td>—</td>
+<td><ul class="findings"><li>None</li></ul></td>
+</tr>
+
+</tbody></table>
+</body></html>
