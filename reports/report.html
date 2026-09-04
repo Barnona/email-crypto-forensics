@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset='utf-8'><title>SecureMailScope Report</title>
+<style>
+@page { size: A4 landscape; margin: 12mm; }
+body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 2rem; color: #111; }
+h1 { margin-bottom: .35rem; }
+.meta { color: #555; margin-bottom: 1.25rem; }
+table { border-collapse: collapse; width: 100%; font-size: 10pt; }
+th, td { border: 1px solid #ccc; padding: .5rem; text-align: left; vertical-align: top; }
+th { background: #f3f3f3; }
+ul { margin: 0; padding-left: 1.1rem; }
+li { margin-bottom: .25rem; }
+</style></head>
+<body><h1>SecureMailScope — Cryptographic Security Posture</h1>
+<p class='meta'>Passive PCAP analysis. Sessions are sorted worst-risk first. Generated: 2026-09-04 16:23:08 UTC</p>
+<table><thead><tr><th>Session</th><th>Protocol</th><th>Source</th><th>Destination</th><th>Severity</th><th>Risk</th><th>ML anomaly</th><th>Findings</th></tr></thead>
+<tbody><tr><td>pcap-stream-0</td><td>SMTP</td><td>192.0.2.10:40001</td><td>198.51.100.20:25</td><td>CRITICAL</td><td>50</td><td>0.0030</td><td><ul><li><b>CRYPTO-001</b> [CRITICAL] SMTP session on port 25 carried no TLS encryption at any point (credentials and message content sent in cleartext).</li><li><b>ML-RISK-001</b> [INFO] Supervised ML risk classification: CRITICAL.</li></ul></td></tr><tr><td>pcap-stream-1</td><td>SMTP</td><td>192.0.2.11:40002</td><td>198.51.100.21:587</td><td>CRITICAL</td><td>20</td><td>0.0030</td><td><ul><li><b>CRYPTO-001</b> [CRITICAL] SMTP session on port 587 carried no TLS encryption at any point (credentials and message content sent in cleartext).</li><li><b>CRYPTO-007</b> [HIGH] Server advertised STARTTLS support but the client session proceeded in plaintext anyway.</li><li><b>ML-RISK-001</b> [INFO] Supervised ML risk classification: CRITICAL.</li></ul></td></tr><tr><td>pcap-stream-2</td><td>IMAP</td><td>192.0.2.12:40003</td><td>198.51.100.22:143</td><td>CRITICAL</td><td>20</td><td>0.0012</td><td><ul><li><b>CRYPTO-001</b> [CRITICAL] IMAP session on port 143 carried no TLS encryption at any point (credentials and message content sent in cleartext).</li><li><b>CRYPTO-007</b> [HIGH] Server advertised STARTTLS support but the client session proceeded in plaintext anyway.</li><li><b>ML-RISK-001</b> [INFO] Supervised ML risk classification: CRITICAL.</li></ul></td></tr><tr><td>pcap-stream-3</td><td>POP3</td><td>192.0.2.13:40004</td><td>198.51.100.23:110</td><td>CRITICAL</td><td>20</td><td>0.0028</td><td><ul><li><b>CRYPTO-001</b> [CRITICAL] POP3 session on port 110 carried no TLS encryption at any point (credentials and message content sent in cleartext).</li><li><b>CRYPTO-007</b> [HIGH] Server advertised STARTTLS support but the client session proceeded in plaintext anyway.</li><li><b>ML-RISK-001</b> [INFO] Supervised ML risk classification: CRITICAL.</li></ul></td></tr></tbody></table></body></html>

@@ -1,0 +1,163 @@
+{
+  "tool": "SecureMailScope",
+  "generated_at": "2026-09-04T16:23:08.201683+00:00",
+  "session_count": 4,
+  "sessions": [
+    {
+      "session_id": "pcap-stream-0",
+      "protocol": "SMTP",
+      "src_ip": "192.0.2.10",
+      "src_port": 40001,
+      "dst_ip": "198.51.100.20",
+      "dst_port": 25,
+      "start_time": "2026-09-04T16:23:08.054546+00:00",
+      "end_time": null,
+      "starttls_offered": false,
+      "starttls_used": false,
+      "tls_session": null,
+      "findings": [
+        {
+          "rule_id": "CRYPTO-001",
+          "severity": "CRITICAL",
+          "category": "ENCRYPTION",
+          "description": "SMTP session on port 25 carried no TLS encryption at any point (credentials and message content sent in cleartext).",
+          "recommendation": "Enforce mandatory TLS -- either move the service to an implicit-TLS port or configure the server to require STARTTLS before accepting authentication/mail commands.",
+          "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
+        }
+      ],
+      "risk_score": 50,
+      "ml_anomaly_score": 0.002961022212469633
+    },
+    {
+      "session_id": "pcap-stream-1",
+      "protocol": "SMTP",
+      "src_ip": "192.0.2.11",
+      "src_port": 40002,
+      "dst_ip": "198.51.100.21",
+      "dst_port": 587,
+      "start_time": "2026-09-04T16:23:08.054873+00:00",
+      "end_time": null,
+      "starttls_offered": true,
+      "starttls_used": false,
+      "tls_session": null,
+      "findings": [
+        {
+          "rule_id": "CRYPTO-001",
+          "severity": "CRITICAL",
+          "category": "ENCRYPTION",
+          "description": "SMTP session on port 587 carried no TLS encryption at any point (credentials and message content sent in cleartext).",
+          "recommendation": "Enforce mandatory TLS -- either move the service to an implicit-TLS port or configure the server to require STARTTLS before accepting authentication/mail commands.",
+          "source": "rule"
+        },
+        {
+          "rule_id": "CRYPTO-007",
+          "severity": "HIGH",
+          "category": "ENCRYPTION",
+          "description": "Server advertised STARTTLS support but the client session proceeded in plaintext anyway.",
+          "recommendation": "Enforce STARTTLS on the server -- reject AUTH/mail commands until TLS has been negotiated (many MTAs support a 'require STARTTLS' setting for exactly this).",
+          "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
+        }
+      ],
+      "risk_score": 20,
+      "ml_anomaly_score": 0.002961022212469633
+    },
+    {
+      "session_id": "pcap-stream-2",
+      "protocol": "IMAP",
+      "src_ip": "192.0.2.12",
+      "src_port": 40003,
+      "dst_ip": "198.51.100.22",
+      "dst_port": 143,
+      "start_time": "2026-09-04T16:23:08.054892+00:00",
+      "end_time": null,
+      "starttls_offered": true,
+      "starttls_used": false,
+      "tls_session": null,
+      "findings": [
+        {
+          "rule_id": "CRYPTO-001",
+          "severity": "CRITICAL",
+          "category": "ENCRYPTION",
+          "description": "IMAP session on port 143 carried no TLS encryption at any point (credentials and message content sent in cleartext).",
+          "recommendation": "Enforce mandatory TLS -- either move the service to an implicit-TLS port or configure the server to require STARTTLS before accepting authentication/mail commands.",
+          "source": "rule"
+        },
+        {
+          "rule_id": "CRYPTO-007",
+          "severity": "HIGH",
+          "category": "ENCRYPTION",
+          "description": "Server advertised STARTTLS support but the client session proceeded in plaintext anyway.",
+          "recommendation": "Enforce STARTTLS on the server -- reject AUTH/mail commands until TLS has been negotiated (many MTAs support a 'require STARTTLS' setting for exactly this).",
+          "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
+        }
+      ],
+      "risk_score": 20,
+      "ml_anomaly_score": 0.0011862352526513797
+    },
+    {
+      "session_id": "pcap-stream-3",
+      "protocol": "POP3",
+      "src_ip": "192.0.2.13",
+      "src_port": 40004,
+      "dst_ip": "198.51.100.23",
+      "dst_port": 110,
+      "start_time": "2026-09-04T16:23:08.054900+00:00",
+      "end_time": null,
+      "starttls_offered": true,
+      "starttls_used": false,
+      "tls_session": null,
+      "findings": [
+        {
+          "rule_id": "CRYPTO-001",
+          "severity": "CRITICAL",
+          "category": "ENCRYPTION",
+          "description": "POP3 session on port 110 carried no TLS encryption at any point (credentials and message content sent in cleartext).",
+          "recommendation": "Enforce mandatory TLS -- either move the service to an implicit-TLS port or configure the server to require STARTTLS before accepting authentication/mail commands.",
+          "source": "rule"
+        },
+        {
+          "rule_id": "CRYPTO-007",
+          "severity": "HIGH",
+          "category": "ENCRYPTION",
+          "description": "Server advertised STARTTLS support but the client session proceeded in plaintext anyway.",
+          "recommendation": "Enforce STARTTLS on the server -- reject AUTH/mail commands until TLS has been negotiated (many MTAs support a 'require STARTTLS' setting for exactly this).",
+          "source": "rule"
+        },
+        {
+          "rule_id": "ML-RISK-001",
+          "severity": "INFO",
+          "category": "ML_RISK",
+          "description": "Supervised ML risk classification: CRITICAL.",
+          "recommendation": "Use the ML class as analyst context; deterministic findings remain the scoring source of truth.",
+          "source": "ml"
+        }
+      ],
+      "risk_score": 20,
+      "ml_anomaly_score": 0.002764093802020695
+    }
+  ]
+}
