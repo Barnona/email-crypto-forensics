@@ -8,11 +8,14 @@ signature algorithm, self-signed status, and chain validity.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from ecforensics.models.session import Certificate
 from ecforensics.tls.cipher_suites import MIN_EC_KEY_SIZE_BITS, MIN_RSA_KEY_SIZE_BITS
 
 try:
-    from cryptography import x509  # noqa: F401  (imported for the TODO below)
+    from cryptography import x509
+    from cryptography.hazmat.primitives.asymmetric import dsa, ec, rsa
 except ImportError:  # pragma: no cover
     x509 = None
 
@@ -21,17 +24,53 @@ def parse_certificate(der_bytes: bytes) -> Certificate:
     """
     Parse a DER certificate into the Certificate model using pyca/cryptography.
 
-    TODO: implement with x509.load_der_x509_certificate(der_bytes), reading
-    .subject, .issuer, .serial_number, .not_valid_before_utc,
-    .not_valid_after_utc, .signature_algorithm_oid, and .public_key()
-    (branch on isinstance to read RSAPublicKey.key_size vs.
-    EllipticCurvePublicKey.curve.key_size). Set is_self_signed by comparing
-    subject == issuer (a heuristic -- true self-signed detection also checks
-    the signature verifies against the certificate's own public key).
+    is_self_signed is a heuristic (subject == issuer) -- true self-signed
+    verification would also check the signature validates against the
+    certificate's own public key, which matters for detecting a forged cert
+    presenting a subject==issuer identity it doesn't actually control. Good
+    enough for a first pass; documented so it isn't mistaken for a stronger
+    guarantee than it is.
     """
     if x509 is None:
         raise ImportError("pip install cryptography")
-    raise NotImplementedError
+
+    cert = x509.load_der_x509_certificate(der_bytes)
+
+    public_key = cert.public_key()
+    if isinstance(public_key, rsa.RSAPublicKey):
+        public_key_algorithm = "RSA"
+        key_size_bits = public_key.key_size
+    elif isinstance(public_key, ec.EllipticCurvePublicKey):
+        public_key_algorithm = "EC"
+        key_size_bits = public_key.key_size
+    elif isinstance(public_key, dsa.DSAPublicKey):
+        public_key_algorithm = "DSA"
+        key_size_bits = public_key.key_size
+    else:
+        public_key_algorithm = type(public_key).__name__
+        key_size_bits = -1
+
+    not_before = cert.not_valid_before_utc
+    not_after = cert.not_valid_after_utc
+    is_expired = datetime.now(timezone.utc) > not_after
+
+    subject = cert.subject.rfc4514_string()
+    issuer = cert.issuer.rfc4514_string()
+    is_self_signed = subject == issuer
+
+    return Certificate(
+        subject=subject,
+        issuer=issuer,
+        serial_number=format(cert.serial_number, "x"),
+        not_before=not_before,
+        not_after=not_after,
+        public_key_algorithm=public_key_algorithm,
+        key_size_bits=key_size_bits,
+        signature_algorithm=cert.signature_algorithm_oid._name,
+        is_self_signed=is_self_signed,
+        is_expired=is_expired,
+        raw_der=der_bytes,
+    )
 
 
 def is_key_size_sufficient(public_key_algorithm: str, key_size_bits: int) -> bool:

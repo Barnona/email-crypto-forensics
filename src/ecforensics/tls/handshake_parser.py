@@ -32,6 +32,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from ecforensics.certificates.extractor import extract_der_certificates_from_pcap
+from ecforensics.certificates.validator import parse_certificate
 from ecforensics.models.session import TLSSession
 from ecforensics.tls.cipher_suite_registry import CIPHER_SUITE_NAMES
 
@@ -168,12 +170,21 @@ class TLSHandshakeParser:
             or "DHE" in cipher_suite
         )
 
-        certificates = []  # TLS 1.3: intentionally empty -- see module docstring.
-        # TODO(certificates/extractor.py + validator.py): for TLS <=1.2 streams
-        # where cert_rows is non-empty, decode tls.handshake.certificate hex
-        # into DER bytes and call certificates.validator.parse_certificate()
-        # per certificate. Not wired yet -- this parser currently reports
-        # negotiated version/cipher/SNI/key-share only.
+        certificates = []
+        if version != "TLSv1.3":
+            # TLS 1.3: intentionally left empty -- see module docstring.
+            # For TLS <=1.2, the Certificate message is sent in the clear
+            # (pre-encryption), so tshark can dissect it directly.
+            der_certs = extract_der_certificates_from_pcap(pcap_path, stream_id)
+            for der in der_certs:
+                try:
+                    certificates.append(parse_certificate(der))
+                except Exception:
+                    # A cert we can't parse shouldn't take down the whole
+                    # session assessment -- skip it rather than raise, so
+                    # one malformed/unusual cert doesn't lose every other
+                    # finding for this session.
+                    continue
 
         return TLSSession(
             tls_version=version,
