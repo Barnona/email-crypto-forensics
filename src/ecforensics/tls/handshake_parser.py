@@ -85,14 +85,7 @@ def _resolve_negotiated_version(client_hello_row: list[str], server_hello_row: O
 
 
 def _extract_sni_from_client_hello(payloads: list[str]) -> Optional[str]:
-    """Fallback SNI extraction for captures where TShark exposes no SNI field.
-
-    Some synthetic/minimal handshakes are sufficiently valid for TShark to
-    decode the negotiated version and cipher suite but not the SNI extension.
-    The fallback only runs on bytes already selected as ClientHello payloads
-    and follows the TLS ClientHello extension framing; it is not a generic
-    packet-content search.
-    """
+    """Extract SNI from TLS ClientHello payload bytes using TLS framing."""
     raw = bytearray()
     for value in payloads:
         try:
@@ -100,8 +93,7 @@ def _extract_sni_from_client_hello(payloads: list[str]) -> Optional[str]:
         except ValueError:
             continue
 
-    # Locate a TLS Handshake record carrying ClientHello.
-    for start in range(max(0, len(raw) - 5)):
+    for start in range(0, max(0, len(raw) - 4)):
         if raw[start] != 0x16 or raw[start + 1:start + 3] not in (b"\x03\x01", b"\x03\x02", b"\x03\x03"):
             continue
         record_len = int.from_bytes(raw[start + 3:start + 5], "big")
@@ -113,8 +105,6 @@ def _extract_sni_from_client_hello(payloads: list[str]) -> Optional[str]:
         if hs_end > record_end:
             continue
 
-        # ClientHello: version(2), random(32), session_id, cipher_suites,
-        # compression_methods, then extensions_length + extensions.
         pos = start + 9 + 2 + 32
         if pos >= hs_end:
             continue
@@ -196,10 +186,7 @@ class TLSHandshakeParser:
         supported_version_ext = sh[2] if len(sh) > 2 else ""
         cipher_hex = sh[3] if len(sh) > 3 else ""
 
-        version = _resolve_negotiated_version(
-            ch[1:] if len(ch) > 1 else [],
-            [record_version, supported_version_ext],
-        )
+        version = _resolve_negotiated_version(ch[1:] if len(ch) > 1 else [], [record_version, supported_version_ext])
 
         cipher_suite = "unknown"
         if cipher_hex:
@@ -211,9 +198,12 @@ class TLSHandshakeParser:
 
         sni = _first_value(ch[1]) if len(ch) > 1 and ch[1] else None
         if not sni:
+            # Do not constrain this query with `tcp contains`: TShark may not
+            # match a fragmented/minimal ClientHello even though tcp.payload
+            # still exposes the bytes needed by the fallback parser.
             payload_rows = _tshark_fields(
                 pcap_path,
-                f"tcp.stream=={stream_id} && tcp.payload && tcp contains 16:03",
+                f"tcp.stream=={stream_id} && tcp.payload",
                 ["tcp.payload"],
             )
             sni = _extract_sni_from_client_hello([row[0] for row in payload_rows if row])
