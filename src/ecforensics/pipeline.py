@@ -45,12 +45,23 @@ def build_sessions_from_pcap(pcap_path: str | Path) -> list[EmailSession]:
         else:
             result = detect_starttls(protocol, stream.client_to_server, stream.server_to_client)
             session.starttls_offered = result.offered
-            session.starttls_used = result.negotiated
-            session.tls_attempted = result.negotiated
-            if result.negotiated:
+            session.starttls_used = result.tls_started
+            session.tls_attempted = result.server_accepted is True or result.tls_clienthello_observed
+
+            if result.server_accepted is True and not result.tls_clienthello_observed:
+                session.analysis_notes.append(
+                    "STARTTLS was accepted, but no TLS ClientHello was observable after the upgrade point."
+                )
+            elif result.tls_started:
                 session.tls_session = parser.parse(pcap_path, stream_id)
-        if session.tls_attempted and session.tls_session is None:
-            session.analysis_notes.append("TLS was attempted/expected, but no complete ServerHello was observable in this capture.")
+                if session.tls_session is None:
+                    session.analysis_notes.append(
+                        "TLS was attempted/expected, but no complete ServerHello was observable in this capture."
+                    )
+        if session.tls_attempted and session.tls_session is None and not session.analysis_notes:
+            session.analysis_notes.append(
+                "TLS was attempted/expected, but no complete ServerHello was observable in this capture."
+            )
         _populate_certificate_chain_status(session)
         sessions.append(session)
     return sessions
