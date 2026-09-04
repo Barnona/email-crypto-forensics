@@ -1,16 +1,13 @@
-"""
-Vertical-slice pipeline: PCAP -> reassembled streams -> EmailSession -> risk findings.
+"""PCAP -> reconstructed email sessions -> rules -> ML -> console report.
 
-This is the real ingestion path (stream_reassembly + protocol_identifier +
-starttls_detector), stopping short of TLS handshake parsing since that
-requires actual TLS bytes in the capture (handshake_parser.py is still
-stubbed -- see innovation_roadmap.md build order). For plaintext-only
-sessions like this one, that's enough to produce a real, non-mock
-EmailSession and run it through the unmodified risk engine.
+The supervised Random Forest is inference-only here: it must be supplied as a
+previously trained model artifact. The Isolation Forest can either be loaded
+from a previously learned baseline or fitted on the current capture, which is
+appropriate for an unsupervised population-level anomaly pass.
 """
 from __future__ import annotations
 
-import sys
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,21 +15,23 @@ from ecforensics.ingestion.stream_reassembly import TCPStreamReassembler
 from ecforensics.ingestion.protocol_identifier import identify_protocol, is_implicit_tls_port
 from ecforensics.tls.starttls_detector import detect_starttls
 from ecforensics.tls.handshake_parser import TLSHandshakeParser
-from ecforensics.models.session import EmailSession
+from ecforensics.models.session import EmailSession, RiskFinding, Severity
 from ecforensics.risk_engine.scorer import assess_sessions, overall_severity
+from ecforensics.ml.feature_extraction import sessions_to_dataframe
+from ecforensics.ml.risk_classifier import MLRiskClassifier
+from ecforensics.ml.anomaly_detector import TLSAnomalyDetector
 
 
 def build_sessions_from_pcap(pcap_path: str | Path) -> list[EmailSession]:
     reassembler = TCPStreamReassembler()
     streams = reassembler.reassemble(pcap_path)
     handshake_parser = TLSHandshakeParser()
+    sessions: list[EmailSession] = []
 
-    sessions = []
     for stream_id, stream in streams.items():
         protocol = identify_protocol(stream.server_port, stream.server_to_client[:64])
-
         if protocol.value == "UNKNOWN":
-            continue  # not an email protocol stream, skip
+            continue
 
         session = EmailSession(
             session_id=f"pcap-stream-{stream_id}",
@@ -45,34 +44,124 @@ def build_sessions_from_pcap(pcap_path: str | Path) -> list[EmailSession]:
         )
 
         if is_implicit_tls_port(stream.server_port):
-            # TLS from byte 0 -- ask the handshake parser directly, no
-            # STARTTLS bookkeeping needed since there's no plaintext phase.
             session.tls_session = handshake_parser.parse(pcap_path, stream_id)
         else:
             starttls = detect_starttls(protocol, stream.client_to_server, stream.server_to_client)
             session.starttls_offered = starttls.offered
             session.starttls_used = starttls.negotiated
             if starttls.negotiated:
-                # tshark's TLS dissector auto-detects the plaintext->TLS
-                # transition within the stream (confirmed against a real
-                # STARTTLS capture -- see tests/test_handshake_parser.py),
-                # so parsing the whole stream_id is sufficient; no manual
-                # byte-offset slicing needed.
                 session.tls_session = handshake_parser.parse(pcap_path, stream_id)
-            # else: plaintext throughout, tls_session stays None
 
         sessions.append(session)
 
     return sessions
 
 
-if __name__ == "__main__":
-    pcap_path = sys.argv[1] if len(sys.argv) > 1 else "data/sample_pcaps/smtp_starttls_unused.pcap"
-    sessions = assess_sessions(build_sessions_from_pcap(pcap_path))
+def apply_ml(
+    sessions: list[EmailSession],
+    risk_model_path: str | Path | None = None,
+    anomaly_model_path: str | Path | None = None,
+    contamination: float = 0.05,
+) -> list[EmailSession]:
+    """Attach ML outputs to already rule-assessed sessions.
 
-    for s in sessions:
-        print(f"{s.session_id}  {s.protocol.value}  {s.src_ip}:{s.src_port} -> {s.dst_ip}:{s.dst_port}")
-        print(f"  starttls_offered={s.starttls_offered}  starttls_used={s.starttls_used}")
-        print(f"  severity={overall_severity(s).value}  risk_score={s.risk_score}")
-        for f in s.findings:
-            print(f"    [{f.rule_id}] {f.description}")
+    Random Forest predictions are informational and do not directly change the
+    deterministic score; this prevents a learned model trained from rule labels
+    from double-counting the same evidence. Isolation Forest anomalies receive
+    a LOW-severity finding and therefore contribute a small, explicit penalty.
+    """
+    if not sessions:
+        return sessions
+
+    features = sessions_to_dataframe(sessions)
+
+    if risk_model_path:
+        classifier = MLRiskClassifier(risk_model_path)
+        predictions = classifier.predict(features)
+        for session, prediction in zip(sessions, predictions):
+            session.findings.append(
+                RiskFinding(
+                    rule_id="ML-RISK-001",
+                    severity=Severity.INFO,
+                    category="ML_RISK",
+                    description=f"Supervised ML risk classification: {prediction}.",
+                    recommendation="Use the ML class as analyst context; deterministic rule findings remain the scoring source of truth.",
+                    source="ml",
+                )
+            )
+
+    detector = TLSAnomalyDetector(contamination=contamination)
+    if anomaly_model_path:
+        detector.load(anomaly_model_path)
+    elif len(sessions) >= 2:
+        detector.fit(features)
+    else:
+        detector = None
+
+    if detector is not None:
+        scores = detector.score(features)
+        labels = detector.predict(features)
+        for session, score, label in zip(sessions, scores, labels):
+            session.ml_anomaly_score = float(score)
+            if int(label) == -1:
+                session.findings.append(
+                    RiskFinding(
+                        rule_id="ML-ANOMALY-001",
+                        severity=Severity.LOW,
+                        category="ANOMALY",
+                        description=(
+                            f"Isolation Forest marked this session as anomalous "
+                            f"(decision score {float(score):.4f})."
+                        ),
+                        recommendation="Review the session alongside its TLS version, cipher, certificate and STARTTLS findings; anomaly detection is a triage signal, not proof of compromise.",
+                        source="ml",
+                    )
+                )
+
+    # Recompute the score after ML anomaly findings. INFO RF findings do not
+    # alter it; LOW anomaly findings deduct 5 points under the existing scorer.
+    for session in sessions:
+        score = 100
+        penalties = {
+            Severity.INFO: 0,
+            Severity.LOW: 5,
+            Severity.MEDIUM: 15,
+            Severity.HIGH: 30,
+            Severity.CRITICAL: 50,
+        }
+        for finding in session.findings:
+            score -= penalties[finding.severity]
+        session.risk_score = max(0, score)
+
+    return sessions
+
+
+def run(pcap_path: str | Path, risk_model_path: str | Path | None = None,
+        anomaly_model_path: str | Path | None = None, contamination: float = 0.05) -> list[EmailSession]:
+    sessions = build_sessions_from_pcap(pcap_path)
+    sessions = assess_sessions(sessions)
+    return apply_ml(sessions, risk_model_path, anomaly_model_path, contamination)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Analyze SMTP/IMAP/POP3 PCAPs with deterministic and ML crypto posture checks")
+    parser.add_argument("pcap", nargs="?", default="data/sample_pcaps/smtp_starttls_unused.pcap")
+    parser.add_argument("--risk-model", type=Path, help="Path to a trained Random Forest model artifact")
+    parser.add_argument("--anomaly-model", type=Path, help="Path to a previously fitted Isolation Forest artifact")
+    parser.add_argument("--contamination", type=float, default=0.05, help="Expected anomaly fraction when fitting Isolation Forest on this capture")
+    args = parser.parse_args()
+
+    sessions = run(args.pcap, args.risk_model, args.anomaly_model, args.contamination)
+    for session in sessions:
+        print(f"{session.session_id}  {session.protocol.value}  {session.src_ip}:{session.src_port} -> {session.dst_ip}:{session.dst_port}")
+        print(f"  STARTTLS offered={session.starttls_offered} used={session.starttls_used}")
+        print(f"  severity={overall_severity(session).value}  risk_score={session.risk_score}")
+        if session.ml_anomaly_score is not None:
+            print(f"  ml_anomaly_score={session.ml_anomaly_score:.4f}")
+        for finding in session.findings:
+            print(f"    [{finding.rule_id}] ({finding.source}) {finding.description}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
