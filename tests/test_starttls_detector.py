@@ -44,9 +44,30 @@ def test_smtp_malformed_tls_record_is_not_clienthello():
     assert not result.tls_started
 
 
+def test_starttls_text_inside_other_client_payload_is_not_a_command():
+    result = detect_starttls(EmailProtocol.SMTP, b"X-Comment: STARTTLS\r\n", b"250-STARTTLS\r\n")
+    assert result.offered
+    assert not result.negotiated
+    assert result.server_accepted is False
+
+
+def test_smtp_rejected_reply_is_not_negotiated():
+    result = detect_starttls(EmailProtocol.SMTP, b"STARTTLS\r\n", b"250-STARTTLS\r\n454 4.7.0 TLS not available\r\n")
+    assert result.offered
+    assert not result.negotiated
+    assert result.server_accepted is False
+
+
 def test_pop3_no_stls_not_detected():
     result = detect_starttls(EmailProtocol.POP3, b"USER alice\r\nPASS hunter2\r\n", b"")
     assert not result.negotiated
+
+
+def test_pop3_stls_positive_reply_is_negotiated():
+    result = detect_starttls(EmailProtocol.POP3, b"STLS\r\n", b"+OK Begin TLS negotiation now\r\n")
+    assert result.negotiated
+    assert result.server_accepted is True
+    assert not result.tls_started
 
 
 def test_imap_starttls_detected_with_ok_reply():
