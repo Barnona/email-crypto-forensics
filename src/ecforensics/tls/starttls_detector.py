@@ -39,31 +39,92 @@ def _clienthello_offset(data: bytes, start: int) -> Optional[int]:
     return None
 
 
-def _smtp_accepts(server: bytes, command_offset: int) -> bool:
-    """Check for a positive SMTP 220 reply after the STARTTLS command."""
-    post_command = server
-    for line in post_command.splitlines():
-        upper = line.strip().upper()
-        if upper.startswith(b"220 ") or upper.startswith(b"220-"):
-            if b"STARTTLS" in upper or b"READY" in upper or b"GO AHEAD" in upper or b"TLS" in upper:
-                return True
-    return False
-
-
-def _imap_accepts(server: bytes) -> bool:
-    """Check for an IMAP tagged OK response indicating STARTTLS acceptance."""
+def _smtp_capability_seen(server: bytes) -> bool:
+    """Return whether SMTP capability text advertises STARTTLS."""
     for line in server.splitlines():
         upper = line.strip().upper()
-        if upper.startswith(b"*"):
-            continue
-        if b" OK" in upper and (b"STARTTLS" in upper or b"TLS" in upper or b"NEGOTIAT" in upper):
+        if upper.startswith((b"250-", b"250 ")) and b"STARTTLS" in upper:
             return True
     return False
 
 
+def _smtp_accepts(server: bytes, command_offset: int) -> bool:
+    """Check the terminal SMTP response associated with the STARTTLS command.
+
+    A 220 greeting is not sufficient: the response must be a TLS/STARTTLS
+    readiness response. If a later 4xx/5xx response rejects TLS, it wins over
+    an earlier positive-looking response in the captured stream.
+    """
+    del command_offset  # Directions are stored separately; byte offsets cannot be correlated.
+    terminal: Optional[bool] = None
+    for line in server.splitlines():
+        upper = line.strip().upper()
+        if upper.startswith((b"220 ", b"220-")):
+            if b"STARTTLS" in upper or b"READY" in upper or b"GO AHEAD" in upper or b"TLS" in upper:
+                terminal = True
+        elif upper[:3] in {b"421", b"450", b"451", b"454", b"500", b"501", b"502", b"503", b"504", b"530", b"550", b"554"}:
+            if b"TLS" in upper or b"STARTTLS" in upper:
+                terminal = False
+    return terminal is True
+
+
+def _imap_capability_seen(server: bytes) -> bool:
+    """Return whether an IMAP capability response advertises STARTTLS."""
+    for line in server.splitlines():
+        upper = line.strip().upper()
+        if upper.startswith(b"*") and b"CAPABILITY" in upper and b"STARTTLS" in upper:
+            return True
+    return False
+
+
+def _imap_command_tag(client: bytes, marker: bytes) -> Optional[bytes]:
+    """Extract the tag from the command line containing STARTTLS."""
+    for line in client.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1] == marker:
+            return parts[0]
+    return None
+
+
+def _imap_accepts(server: bytes, command_tag: Optional[bytes]) -> bool:
+    """Check the tagged IMAP OK response for the STARTTLS command."""
+    if not command_tag:
+        return False
+    tag = command_tag.upper()
+    for line in server.splitlines():
+        upper = line.strip().upper()
+        if not upper.startswith(tag + b" "):
+            continue
+        parts = upper.split(None, 2)
+        if len(parts) >= 2 and parts[1] == b"OK":
+            return b"STARTTLS" in upper or b"TLS" in upper or b"NEGOTIAT" in upper
+        return False
+    return False
+
+
+def _pop3_capability_seen(server: bytes) -> bool:
+    """Return whether POP3 capability text advertises STLS."""
+    in_capa = False
+    for line in server.splitlines():
+        upper = line.strip().upper()
+        if upper.startswith(b"+OK") and b"CAPA" in upper:
+            in_capa = True
+            continue
+        if in_capa:
+            if upper == b".":
+                in_capa = False
+            elif upper == b"STLS":
+                return True
+    return False
+
+
 def _pop3_accepts(server: bytes) -> bool:
-    """Check for the POP3 +OK response to STLS."""
-    return any(line.strip().upper().startswith(b"+OK") for line in server.splitlines())
+    """Check for a POP3 +OK response specifically indicating TLS negotiation."""
+    return any(
+        (line.strip().upper().startswith(b"+OK")
+         and any(token in line.strip().upper() for token in (b"TLS", b"STLS", b"NEGOTIAT")))
+        for line in server.splitlines()
+    )
 
 
 def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_client: bytes) -> StartTLSResult:
@@ -77,7 +138,13 @@ def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_
 
     server = server_to_client.upper()
     client = client_to_server.upper()
-    offered = marker in server
+    if protocol is EmailProtocol.SMTP:
+        offered = _smtp_capability_seen(server)
+    elif protocol is EmailProtocol.IMAP:
+        offered = _imap_capability_seen(server)
+    else:
+        offered = _pop3_capability_seen(server)
+
     command_offset = client.find(marker)
     if command_offset < 0:
         return StartTLSResult(offered, False, None, None, False)
@@ -86,6 +153,7 @@ def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_
     # treating arbitrary payload text containing STARTTLS/STLS as a command.
     command_seen = any(
         line.strip() == marker or line.strip().startswith(marker + b" ") or line.strip().endswith(b" " + marker)
+        or (protocol is EmailProtocol.IMAP and len(line.strip().split()) >= 2 and line.strip().split()[1] == marker)
         for line in client.splitlines()
     )
     if not command_seen:
@@ -94,7 +162,7 @@ def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_
     if protocol is EmailProtocol.SMTP:
         accepted = _smtp_accepts(server, command_offset)
     elif protocol is EmailProtocol.IMAP:
-        accepted = _imap_accepts(server)
+        accepted = _imap_accepts(server, _imap_command_tag(client, marker))
     else:
         accepted = _pop3_accepts(server)
 
