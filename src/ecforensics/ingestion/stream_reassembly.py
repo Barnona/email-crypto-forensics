@@ -21,8 +21,6 @@ class TCPStream:
     end_time: datetime | None = None
 
 
-# Ports that identify the server side of the supported mail protocols. They are
-# used only as a fallback when a capture starts after the TCP handshake.
 _MAIL_SERVER_PORTS = {25, 110, 143, 465, 587, 993, 995}
 
 
@@ -55,18 +53,12 @@ def _stream_meta_from_rows(output: str, seen: set[str]) -> list[dict]:
         dst = _endpoint(parts[4], parts[5], parts[6])
         if src is None or dst is None:
             continue
-
-        # Prefer a well-known mail service port when the capture begins
-        # mid-stream. Otherwise retain the first observed direction as the
-        # client-to-server direction; protocol identification can still reject
-        # unrelated TCP streams later in the pipeline.
         if src[1] in _MAIL_SERVER_PORTS and dst[1] not in _MAIL_SERVER_PORTS:
             client, server = dst, src
         elif dst[1] in _MAIL_SERVER_PORTS and src[1] not in _MAIL_SERVER_PORTS:
             client, server = src, dst
         else:
             client, server = src, dst
-
         seen.add(parts[0])
         streams.append({
             "stream_id": parts[0],
@@ -85,18 +77,12 @@ def _list_tcp_streams(pcap_path: str | Path) -> list[dict]:
     ]
     seen: set[str] = set()
     streams: list[dict] = []
-
-    # First use the original SYN to establish the true client/server roles.
     syn_output = _run_tshark([
         "-r", str(pcap_path),
         "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0",
         *fields,
     ])
     streams.extend(_stream_meta_from_rows(syn_output, seen))
-
-    # A partial capture may contain only the middle/end of a TCP session and
-    # therefore no original SYN. Discover those streams as a fallback, then
-    # infer the server side from the supported mail-service ports.
     all_output = _run_tshark([
         "-r", str(pcap_path),
         "-Y", "tcp",
@@ -107,20 +93,12 @@ def _list_tcp_streams(pcap_path: str | Path) -> list[dict]:
 
 
 def _reassemble_direction(chunks: list[tuple[int, bytes]]) -> tuple[bytes, bool]:
-    """Reassemble one TCP direction and report whether payload has sequence gaps.
-
-    Chunks are keyed by absolute TCP sequence number. Out-of-order data is
-    sorted, exact retransmissions are discarded, and partially overlapping
-    retransmissions contribute only bytes not already present. A gap remains
-    a gap rather than being silently hidden by capture-order concatenation.
-    """
+    """Reassemble one TCP direction and report whether payload has sequence gaps."""
     if not chunks:
         return b"", False
-
     chunks = sorted((seq, payload) for seq, payload in chunks if payload)
     if not chunks:
         return b"", False
-
     assembled = bytearray()
     expected = chunks[0][0]
     has_gap = False
@@ -133,7 +111,6 @@ def _reassemble_direction(chunks: list[tuple[int, bytes]]) -> tuple[bytes, bool]
             assembled.extend(payload)
             expected = end
             continue
-        # seq <= expected < end: append only the previously unseen suffix.
         overlap = expected - seq
         assembled.extend(payload[overlap:])
         expected = end
@@ -152,12 +129,13 @@ def _stream_packets(pcap_path: str | Path, stream_id: str) -> list[dict]:
         "-T", "fields", "-E", "separator=\t", "-E", "quote=n",
         "-e", "frame.time_epoch", "-e", "ip.src", "-e", "ipv6.src",
         "-e", "tcp.srcport", "-e", "tcp.seq_raw", "-e", "tcp.len",
-        "-e", "tcp.payload", "-e", "tcp.flags.fin", "-e", "tcp.flags.reset",
+        "-e", "tcp.payload", "-e", "tcp.flags.syn", "-e", "tcp.flags.fin",
+        "-e", "tcp.flags.reset",
     ])
     packets: list[dict] = []
     for line in output.splitlines():
         parts = line.split("\t")
-        if len(parts) != 9:
+        if len(parts) != 10:
             continue
         src = parts[1] or parts[2]
         try:
@@ -176,8 +154,9 @@ def _stream_packets(pcap_path: str | Path, stream_id: str) -> list[dict]:
         packets.append({
             "time": time, "src": src, "src_port": src_port,
             "seq": seq, "tcp_len": tcp_len, "payload": payload,
-            "fin": _tshark_flag_is_set(parts[7]),
-            "reset": _tshark_flag_is_set(parts[8]),
+            "syn": _tshark_flag_is_set(parts[7]),
+            "fin": _tshark_flag_is_set(parts[8]),
+            "reset": _tshark_flag_is_set(parts[9]),
         })
     return packets
 
@@ -185,29 +164,34 @@ def _stream_packets(pcap_path: str | Path, stream_id: str) -> list[dict]:
 def _reassemble_stream(pcap_path: str | Path, meta: dict) -> TCPStream:
     packets = _stream_packets(pcap_path, meta["stream_id"])
     client_key = (meta["client_ip"], meta["client_port"])
+    server_key = (meta["server_ip"], meta["server_port"])
     c2s_chunks: list[tuple[int, bytes]] = []
     s2c_chunks: list[tuple[int, bytes]] = []
     client_fin = server_fin = False
     reset_seen = False
+    handshake_observed = False
 
     for packet in packets:
         key = (packet["src"], packet["src_port"])
+        if packet["syn"] and key in {client_key, server_key}:
+            handshake_observed = True
         if packet["fin"]:
             if key == client_key:
                 client_fin = True
-            elif key == (meta["server_ip"], meta["server_port"]):
+            elif key == server_key:
                 server_fin = True
         reset_seen = reset_seen or packet["reset"]
         if packet["seq"] is None or not packet["payload"]:
             continue
         if key == client_key:
             c2s_chunks.append((packet["seq"], packet["payload"]))
-        elif key == (meta["server_ip"], meta["server_port"]):
+        elif key == server_key:
             s2c_chunks.append((packet["seq"], packet["payload"]))
 
     c2s, c2s_gap = _reassemble_direction(c2s_chunks)
     s2c, s2c_gap = _reassemble_direction(s2c_chunks)
-    complete = (client_fin and server_fin or reset_seen) and not (c2s_gap or s2c_gap)
+    connection_closed = (client_fin and server_fin) or reset_seen
+    complete = handshake_observed and connection_closed and not (c2s_gap or s2c_gap)
     times = [packet["time"] for packet in packets]
     start = datetime.fromtimestamp(min(times), timezone.utc) if times else None
     end = datetime.fromtimestamp(max(times), timezone.utc) if times else None
