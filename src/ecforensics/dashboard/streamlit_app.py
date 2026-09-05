@@ -31,6 +31,7 @@ _SEVERITY_ORDER = {
 
 
 def _sort_sessions(sessions: list[EmailSession]) -> list[EmailSession]:
+    """Return sessions worst-risk first, with deterministic tie-breaking."""
     return sorted(
         sessions,
         key=lambda s: (_SEVERITY_ORDER[overall_severity(s)], s.risk_score or 0, s.session_id),
@@ -39,11 +40,12 @@ def _sort_sessions(sessions: list[EmailSession]) -> list[EmailSession]:
 
 
 def _tls_state(session: EmailSession) -> str:
+    """Describe TLS observability without claiming plaintext when it was not seen."""
     if session.tls_session is not None:
         return "Encrypted / TLS observed"
     if session.tls_attempted:
         return "Not observable (TLS attempted)"
-    return "Plaintext observed / no TLS upgrade"
+    return "No TLS handshake observed"
 
 
 def _session_rows(sessions: list[EmailSession]) -> list[dict]:
@@ -92,19 +94,26 @@ def _build_json_bytes(sessions: list[EmailSession]) -> bytes:
 
 
 def _render_downloads(sessions: list[EmailSession]) -> None:
+    """Render report downloads and expose PDF fallback failures clearly."""
     st.subheader("Reports")
+    st.caption(
+        f"Ready to export {len(sessions)} analysed session(s). Reports use the same "
+        "worst-risk-first ordering as the dashboard."
+    )
     cols = st.columns(3)
     cols[0].download_button(
         "Download JSON",
         data=_build_json_bytes(sessions),
         file_name="securemailscope-report.json",
         mime="application/json",
+        width="stretch",
     )
     cols[1].download_button(
         "Download HTML",
         data=render_html(_sort_sessions(sessions)).encode("utf-8"),
         file_name="securemailscope-report.html",
         mime="text/html",
+        width="stretch",
     )
     with tempfile.TemporaryDirectory(prefix="securemailscope-report-") as tmp:
         pdf_path = Path(tmp) / "securemailscope-report.pdf"
@@ -117,18 +126,21 @@ def _render_downloads(sessions: list[EmailSession]) -> None:
                 data=pdf_path.read_bytes(),
                 file_name="securemailscope-report.pdf",
                 mime="application/pdf",
+                width="stretch",
             )
         except (ImportError, OSError, RuntimeError) as exc:
-            cols[2].button("PDF unavailable", disabled=True, help=str(exc))
+            cols[2].button("PDF unavailable", disabled=True, help=str(exc), width="stretch")
+            st.warning(f"PDF export is unavailable in this environment: {exc}")
 
 
 def _overview(sessions: list[EmailSession]) -> None:
     summary = build_summary(sessions)
     counts = summary["severity_counts"]
     encrypted = sum(s.tls_session is not None for s in sessions)
-    plaintext = sum(not s.tls_attempted and s.tls_session is None for s in sessions)
+    plaintext_observed = sum(not s.tls_attempted and s.tls_session is None for s in sessions)
     not_observable = sum(s.tls_attempted and s.tls_session is None for s in sessions)
     starttls_used = sum(s.starttls_used for s in sessions)
+    incomplete = sum(not s.capture_complete for s in sessions)
     avg_risk = sum(s.risk_score or 0 for s in sessions) / len(sessions) if sessions else 0
 
     cols = st.columns(6)
@@ -140,15 +152,16 @@ def _overview(sessions: list[EmailSession]) -> None:
     cols[5].metric("TLS observed", encrypted)
 
     st.caption(
-        f"TLS state: {encrypted} encrypted/observed · {plaintext} plaintext/no TLS · "
-        f"{not_observable} not observable after a TLS attempt · {starttls_used} STARTTLS upgrades observed."
+        f"TLS state: {encrypted} encrypted/observed · {plaintext_observed} with no TLS handshake observed · "
+        f"{not_observable} not observable after a TLS attempt · {starttls_used} STARTTLS upgrades observed · "
+        f"{incomplete} incomplete capture(s)."
     )
 
     severity_df = pd.DataFrame(
         {"Sessions": [counts[s.value] for s in Severity]},
         index=[s.value for s in Severity],
     )
-    st.bar_chart(severity_df)
+    st.bar_chart(severity_df, width="stretch")
 
 
 def _session_explorer(sessions: list[EmailSession]) -> None:
@@ -158,24 +171,49 @@ def _session_explorer(sessions: list[EmailSession]) -> None:
         return
     df = pd.DataFrame(rows)
     c1, c2, c3 = st.columns(3)
-    protocols = c1.multiselect("Protocol", sorted(df["Protocol"].unique()), default=sorted(df["Protocol"].unique()))
-    severities = c2.multiselect("Severity", [s.value for s in Severity], default=[s.value for s in Severity])
-    tls_states = c3.multiselect("TLS state", sorted(df["TLS state"].unique()), default=sorted(df["TLS state"].unique()))
-    filtered = df[df["Protocol"].isin(protocols) & df["Severity"].isin(severities) & df["TLS state"].isin(tls_states)]
-    st.dataframe(filtered, use_container_width=True, hide_index=True)
+    protocols = c1.multiselect(
+        "Protocol", sorted(df["Protocol"].unique()), default=sorted(df["Protocol"].unique())
+    )
+    severities = c2.multiselect(
+        "Severity", [s.value for s in Severity], default=[s.value for s in Severity]
+    )
+    tls_states = c3.multiselect(
+        "TLS state", sorted(df["TLS state"].unique()), default=sorted(df["TLS state"].unique())
+    )
+    filtered = df[
+        df["Protocol"].isin(protocols)
+        & df["Severity"].isin(severities)
+        & df["TLS state"].isin(tls_states)
+    ]
+    st.dataframe(filtered, width="stretch", hide_index=True)
+
+    if filtered.empty:
+        st.info("No sessions match the selected filters.")
+        return
 
     st.subheader("Session details")
-    session_map = {s.session_id: s for s in _sort_sessions(sessions) if s.session_id in set(filtered["Session"])}
-    selected_id = st.selectbox("Inspect session", list(session_map), format_func=lambda sid: f"{sid} — {overall_severity(session_map[sid]).value}")
+    visible_ids = set(filtered["Session"])
+    session_map = {
+        s.session_id: s for s in _sort_sessions(sessions) if s.session_id in visible_ids
+    }
+    selected_id = st.selectbox(
+        "Inspect session",
+        list(session_map),
+        format_func=lambda sid: f"{sid} — {overall_severity(session_map[sid]).value}",
+    )
     session = session_map[selected_id]
     tls = session.tls_session
     left, right = st.columns(2)
     with left:
         st.write(f"**Protocol:** {session.protocol.value}")
         st.write(f"**Endpoint:** {session.src_ip}:{session.src_port} → {session.dst_ip}:{session.dst_port}")
+        st.write(f"**Start:** {session.start_time}")
+        st.write(f"**End:** {session.end_time or 'Not observed'}")
         st.write(f"**Capture:** {'Complete' if session.capture_complete else 'Incomplete'}")
         st.write(f"**TLS:** {_tls_state(session)}")
-        st.write(f"**STARTTLS:** {'used' if session.starttls_used else 'offered' if session.starttls_offered else 'not detected'}")
+        st.write(
+            f"**STARTTLS:** {'used' if session.starttls_used else 'offered' if session.starttls_offered else 'not detected'}"
+        )
     with right:
         st.write(f"**Risk:** {session.risk_score if session.risk_score is not None else 'Not scored'} / 100")
         st.write(f"**ML risk:** {session.ml_risk_class or 'Not run'}")
@@ -213,11 +251,22 @@ def _findings(sessions: list[EmailSession]) -> None:
         for session, finding in findings
     ]
     df = pd.DataFrame(rows)
-    severity_filter = st.multiselect("Finding severity", [s.value for s in Severity], default=[s.value for s in Severity])
-    st.dataframe(df[df["Severity"].isin(severity_filter)], use_container_width=True, hide_index=True)
+    severity_filter = st.multiselect(
+        "Finding severity", [s.value for s in Severity], default=[s.value for s in Severity]
+    )
+    filtered = df[df["Severity"].isin(severity_filter)]
+    st.dataframe(filtered, width="stretch", hide_index=True)
 
+    if filtered.empty:
+        st.info("No findings match the selected severity filters.")
+        return
+
+    selected_finding_ids = set(
+        zip(filtered["Session"], filtered["Rule"], filtered["Description"])
+    )
     for session, finding in findings:
-        if finding.severity.value not in severity_filter:
+        finding_key = (session.session_id, finding.rule_id, finding.description)
+        if finding_key not in selected_finding_ids:
             continue
         with st.expander(f"{finding.severity.value} · {finding.rule_id} · {session.session_id}"):
             st.write(finding.description)
@@ -240,10 +289,16 @@ def _tls_analysis(sessions: list[EmailSession]) -> None:
     left, right = st.columns(2)
     with left:
         st.markdown("**TLS versions**")
-        st.dataframe(pd.DataFrame.from_dict(versions, orient="index", columns=["Sessions"]), use_container_width=True)
+        st.dataframe(
+            pd.DataFrame.from_dict(versions, orient="index", columns=["Sessions"]),
+            width="stretch",
+        )
     with right:
         st.markdown("**Cipher suites**")
-        st.dataframe(pd.DataFrame.from_dict(ciphers, orient="index", columns=["Sessions"]), use_container_width=True)
+        st.dataframe(
+            pd.DataFrame.from_dict(ciphers, orient="index", columns=["Sessions"]),
+            width="stretch",
+        )
 
     cert_rows = []
     for session in tls_sessions:
@@ -262,7 +317,55 @@ def _tls_analysis(sessions: list[EmailSession]) -> None:
             )
     if cert_rows:
         st.markdown("**Certificates**")
-        st.dataframe(pd.DataFrame(cert_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(cert_rows), width="stretch", hide_index=True)
+
+
+def _timeline(sessions: list[EmailSession]) -> None:
+    """Show capture chronology without implying packet-level events we do not model."""
+    rows = []
+    for session in _sort_sessions(sessions):
+        rows.append(
+            {
+                "Start": session.start_time,
+                "End": session.end_time or session.start_time,
+                "Session": session.session_id,
+                "Protocol": session.protocol.value,
+                "Severity": overall_severity(session).value,
+                "Risk score": session.risk_score,
+                "TLS state": _tls_state(session),
+                "Capture": "Complete" if session.capture_complete else "Incomplete",
+            }
+        )
+    if not rows:
+        st.info("No session timeline is available.")
+        return
+
+    timeline = pd.DataFrame(rows).sort_values(["Start", "Risk score"], ascending=[True, False])
+    st.dataframe(timeline, width="stretch", hide_index=True)
+    st.caption("Timeline uses reconstructed session start/end timestamps; packet-level event timing is not exposed here.")
+
+
+def _analyse_cached(
+    pcap_bytes: bytes,
+    risk_model: str | None,
+    anomaly_model: str | None,
+    contamination: float,
+) -> list[EmailSession]:
+    """Cache analysis results so tab/filter reruns do not rerun TShark."""
+    with tempfile.TemporaryDirectory(prefix="securemailscope-ui-") as tmp:
+        path = Path(tmp) / "capture.pcap"
+        path.write_bytes(pcap_bytes)
+        risk_path = Path(risk_model) if risk_model and Path(risk_model).exists() else None
+        anomaly_path = Path(anomaly_model) if anomaly_model and Path(anomaly_model).exists() else None
+        return analyze(
+            path,
+            risk_path,
+            anomaly_path,
+            contamination=contamination,
+        )
+
+
+_analyse_cached = st.cache_data(show_spinner=False)(_analyse_cached)
 
 
 def main() -> None:
@@ -275,32 +378,40 @@ def main() -> None:
         risk_model = st.text_input("Risk model path", "models/risk_classifier.joblib")
         anomaly_model = st.text_input("Anomaly model path", "models/anomaly_detector.joblib")
         contamination = st.slider("Anomaly contamination", 0.01, 0.50, 0.05, 0.01)
+        if st.button("Clear cached analysis", width="stretch"):
+            _analyse_cached.clear()
+            st.success("Analysis cache cleared. Re-run analysis when needed.")
 
     if not uploaded:
         st.info("Upload a capture from the sidebar to begin passive analysis.")
         return
 
-    # The uploaded PCAP exists only for the duration of the analysis run.
-    with tempfile.TemporaryDirectory(prefix="securemailscope-ui-") as tmp:
-        path = Path(tmp) / (uploaded.name or "capture.pcap")
-        path.write_bytes(uploaded.getvalue())
-        try:
-            with st.spinner("Reassembling streams and analysing TLS posture…"):
-                sessions = analyze(
-                    path,
-                    Path(risk_model) if risk_model and Path(risk_model).exists() else None,
-                    Path(anomaly_model) if anomaly_model and Path(anomaly_model).exists() else None,
-                    contamination=contamination,
-                )
-        except Exception as exc:
-            st.error(f"Analysis failed: {exc}")
-            return
+    try:
+        with st.spinner("Reassembling streams and analysing TLS posture…"):
+            sessions = _analyse_cached(
+                uploaded.getvalue(),
+                risk_model or None,
+                anomaly_model or None,
+                contamination,
+            )
+    except Exception as exc:
+        st.error(f"Analysis failed: {exc}")
+        return
 
     if not sessions:
         st.warning("The capture was processed, but no SMTP / IMAP / POP3 sessions were identified.")
         return
 
-    tabs = st.tabs(["Security Posture", "Session Explorer", "Risk Findings", "TLS Analysis", "Reports"])
+    tabs = st.tabs(
+        [
+            "Security Posture",
+            "Session Explorer",
+            "Risk Findings",
+            "TLS Analysis",
+            "Timeline",
+            "Reports",
+        ]
+    )
     with tabs[0]:
         _overview(sessions)
     with tabs[1]:
@@ -310,6 +421,8 @@ def main() -> None:
     with tabs[3]:
         _tls_analysis(sessions)
     with tabs[4]:
+        _timeline(sessions)
+    with tabs[5]:
         _render_downloads(sessions)
 
 
