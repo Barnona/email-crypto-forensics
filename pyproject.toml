@@ -9,7 +9,6 @@ description = "Passive SMTP/IMAP/POP3 cryptographic security posture assessment"
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
-  "pyshark>=0.6",
   "cryptography>=42.0",
   "pandas>=2.0",
   "scikit-learn>=1.4",
