@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from ecforensics.pipeline import build_sessions_from_pcap
 from ecforensics.models.session import EmailProtocol
+from ecforensics.pipeline import build_sessions_from_pcap
 
 
 pytestmark = pytest.mark.skipif(shutil.which("tshark") is None, reason="tshark is required for PCAP integration tests")
@@ -67,7 +67,9 @@ def _tls_record(handshake: bytes) -> bytes:
 
 def _client_hello() -> bytes:
     server_name = b"mail.example.test"
-    sni_body = b"\x00" + (len(server_name) + 3).to_bytes(2, "big") + b"\x00" + len(server_name).to_bytes(2, "big") + server_name
+    # ServerNameList: list length (2 bytes), NameType (1), name length (2), name.
+    server_name_entry = b"\x00" + len(server_name).to_bytes(2, "big") + server_name
+    sni_body = len(server_name_entry).to_bytes(2, "big") + server_name_entry
     extension = b"\x00\x00" + len(sni_body).to_bytes(2, "big") + sni_body
     body = b"\x03\x03" + bytes(range(32)) + b"\x00" + b"\x00\x02\xc0\x2f" + b"\x01\x00" + len(extension).to_bytes(2, "big") + extension
     return b"\x01" + len(body).to_bytes(3, "big") + body
