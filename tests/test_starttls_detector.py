@@ -58,6 +58,28 @@ def test_smtp_rejected_reply_is_not_negotiated():
     assert result.server_accepted is False
 
 
+def test_smtp_late_greeting_does_not_accept_unrelated_starttls():
+    """A positive-looking line must not be enough when a later TLS response rejects it."""
+    result = detect_starttls(
+        EmailProtocol.SMTP,
+        b"STARTTLS\r\n",
+        b"220 mail.example.com ESMTP\r\n454 4.7.0 TLS not available\r\n",
+    )
+    assert not result.negotiated
+    assert result.server_accepted is False
+
+
+def test_smtp_arbitrary_server_text_is_not_capability_offer():
+    result = detect_starttls(
+        EmailProtocol.SMTP,
+        b"STARTTLS\r\n",
+        b"250 Hello\r\n550 Message mentions STARTTLS but not as a capability\r\n220 Ready to start TLS\r\n",
+    )
+    assert not result.offered
+    assert result.negotiated
+    assert result.server_accepted is True
+
+
 def test_pop3_no_stls_not_detected():
     result = detect_starttls(EmailProtocol.POP3, b"USER alice\r\nPASS hunter2\r\n", b"")
     assert not result.negotiated
@@ -70,8 +92,30 @@ def test_pop3_stls_positive_reply_is_negotiated():
     assert not result.tls_started
 
 
+def test_pop3_arbitrary_ok_text_is_not_stls_acceptance():
+    result = detect_starttls(EmailProtocol.POP3, b"STLS\r\n", b"+OK Previous TLS session information\r\n")
+    assert not result.negotiated
+    assert result.server_accepted is False
+
+
 def test_imap_starttls_detected_with_ok_reply():
     result = detect_starttls(EmailProtocol.IMAP, b"a1 STARTTLS\r\n", b"* OK IMAP4 ready\r\na1 OK Begin TLS negotiation now\r\n")
     assert result.negotiated
     assert result.server_accepted is True
     assert not result.tls_started
+
+
+def test_imap_unrelated_tagged_ok_does_not_accept_starttls():
+    result = detect_starttls(EmailProtocol.IMAP, b"a1 STARTTLS\r\n", b"* OK IMAP4 ready\r\na2 OK Begin TLS negotiation now\r\n")
+    assert not result.negotiated
+    assert result.server_accepted is False
+
+
+def test_imap_starttls_capability_requires_capability_response():
+    result = detect_starttls(
+        EmailProtocol.IMAP,
+        b"a1 STARTTLS\r\n",
+        b"* OK Server text mentions STARTTLS\r\na1 OK Begin TLS negotiation now\r\n",
+    )
+    assert not result.offered
+    assert result.negotiated
