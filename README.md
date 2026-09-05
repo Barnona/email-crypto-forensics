@@ -117,7 +117,7 @@ Use a checked-in test capture:
 
 ```bash
 ecforensics analyze \
-  --pcap test-captures/mixed_email.pcap \
+  --pcap data/pcaps/mixed_email.pcap \
   --output-dir out \
   --format all \
   --risk-model models/risk_classifier.joblib \
@@ -128,7 +128,7 @@ On Windows PowerShell, the same command can be written as:
 
 ```powershell
 ecforensics analyze `
-  --pcap test-captures\mixed_email.pcap `
+  --pcap data\pcaps\mixed_email.pcap `
   --output-dir out `
   --format all `
   --risk-model models\risk_classifier.joblib `
@@ -142,7 +142,7 @@ The CLI writes the requested reports to `out/`. `--format` accepts `json`, `html
 The legacy script remains available for compatibility with earlier project workflows:
 
 ```bash
-python scripts/run_pipeline.py test-captures/mixed_email.pcap \
+python scripts/run_pipeline.py data/pcaps/mixed_email.pcap \
   --risk-model models/risk_classifier.joblib \
   --anomaly-model models/anomaly_detector.joblib \
   --json out/report.json \
@@ -164,26 +164,26 @@ Then open the local Streamlit URL shown in the terminal. Upload a `.pcap` or `.p
 
 The dashboard uses the same canonical `ecforensics.pipeline.analyze` path as the CLI; it is a presentation layer, not a second analysis implementation.
 
-## Test and sample captures
+## PCAP/PCAPNG capture library
 
-PCAP/PCAPNG files are intentionally kept in the repository when they serve as reproducible test fixtures or user-facing samples.
-
-Current checked-in captures include:
+All checked-in packet captures are kept in one central location so tests, demos and manual analysis use a single predictable path:
 
 ```text
-test-captures/
+data/pcaps/
   imap_plaintext.pcap
+  imap_starttls_used.pcap
   mixed_email.pcap
   pop3_plaintext.pcap
   smtp_plaintext.pcap
   smtp_starttls_unused.pcap
-
-data/sample_pcaps/
-  certs/
-    expired_handshake.pcap
+  starttls_upgrade.pcap
+  tls13_handshake.pcap
+  tls_handshake.pcap
+  expired_handshake.pcap
+  sample.pcap
 ```
 
-`sample.pcap` is also retained as a small top-level sample for compatibility with existing workflows.
+These captures are intentional reproducible fixtures and user-facing samples. `data/pcaps/` is the canonical capture directory; no pipeline logic depends on the previous `test-captures/` or `data/sample_pcaps/` locations.
 
 Do not add arbitrary packet captures containing credentials, personal data, or other sensitive traffic. Prefer synthetic or sanitised captures.
 
@@ -216,8 +216,7 @@ src/ecforensics/
   cli.py         Supported command-line entry point
 scripts/         Capture generation, model training and compatibility tooling
 tests/           Unit and integration tests
-test-captures/  Reproducible PCAP test fixtures
-data/            Certificate and sample PCAP fixtures
+data/pcaps/     Centralised reproducible PCAP/PCAPNG fixtures and samples
 models/          Prototype trained model artefacts
 docs/            Architecture and design documentation
 ```

@@ -7,7 +7,7 @@ from ecforensics.ingestion.stream_reassembly import TCPStreamReassembler
 from ecforensics.ingestion.protocol_identifier import identify_protocol
 from ecforensics.tls.starttls_detector import detect_starttls
 
-_PCAP_DIR = Path(__file__).parent.parent / "data" / "sample_pcaps"
+_PCAP_DIR = Path(__file__).parent.parent / "data" / "pcaps"
 _HAS_TSHARK = shutil.which("tshark") is not None
 
 def _run(name):
