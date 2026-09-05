@@ -7,3 +7,6 @@ build/
 dist/
 .pytest_cache/
 out/
+
+# Keep intentional reproducible PCAP fixtures/samples tracked.
+# Do not add arbitrary or sensitive captures.
