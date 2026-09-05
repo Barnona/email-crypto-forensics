@@ -30,8 +30,6 @@ def _clienthello_offset(data: bytes, start: int) -> Optional[int]:
         record_end = offset + 5 + record_length
         if record_length < 4 or record_end > len(data):
             continue
-        # TLS handshake type 0x01 is ClientHello. Require its handshake
-        # length to fit inside the record rather than accepting a stray byte.
         handshake_length = int.from_bytes(data[offset + 6:offset + 9], "big")
         if data[offset + 5] != 0x01 or handshake_length + 4 > record_length:
             continue
@@ -49,13 +47,8 @@ def _smtp_capability_seen(server: bytes) -> bool:
 
 
 def _smtp_accepts(server: bytes, command_offset: int) -> bool:
-    """Check the terminal SMTP response associated with the STARTTLS command.
-
-    A 220 greeting is not sufficient: the response must be a TLS/STARTTLS
-    readiness response. If a later 4xx/5xx response rejects TLS, it wins over
-    an earlier positive-looking response in the captured stream.
-    """
-    del command_offset  # Directions are stored separately; byte offsets cannot be correlated.
+    """Check the terminal SMTP response associated with the STARTTLS command."""
+    del command_offset
     terminal: Optional[bool] = None
     for line in server.splitlines():
         upper = line.strip().upper()
@@ -119,12 +112,19 @@ def _pop3_capability_seen(server: bytes) -> bool:
 
 
 def _pop3_accepts(server: bytes) -> bool:
-    """Check for a POP3 +OK response specifically indicating TLS negotiation."""
-    return any(
-        (line.strip().upper().startswith(b"+OK")
-         and any(token in line.strip().upper() for token in (b"TLS", b"STLS", b"NEGOTIAT")))
-        for line in server.splitlines()
+    """Check for a POP3 +OK response that explicitly starts TLS negotiation."""
+    acceptance_phrases = (
+        b"BEGIN TLS",
+        b"BEGIN STLS",
+        b"TLS NEGOTIATION",
+        b"STLS NEGOTIATION",
+        b"START TLS",
     )
+    for line in server.splitlines():
+        upper = line.strip().upper()
+        if upper.startswith(b"+OK") and any(phrase in upper for phrase in acceptance_phrases):
+            return True
+    return False
 
 
 def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_client: bytes) -> StartTLSResult:
@@ -149,8 +149,6 @@ def detect_starttls(protocol: EmailProtocol, client_to_server: bytes, server_to_
     if command_offset < 0:
         return StartTLSResult(offered, False, None, None, False)
 
-    # Require the protocol command token to appear on a line rather than
-    # treating arbitrary payload text containing STARTTLS/STLS as a command.
     command_seen = any(
         line.strip() == marker or line.strip().startswith(marker + b" ") or line.strip().endswith(b" " + marker)
         or (protocol is EmailProtocol.IMAP and len(line.strip().split()) >= 2 and line.strip().split()[1] == marker)
