@@ -1,5 +1,4 @@
 # Core packet/TLS analysis
-pyshark>=0.6
 cryptography>=42.0
 
 # Optional packet tooling used by fixture-generation scripts
