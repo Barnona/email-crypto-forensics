@@ -1,4 +1,4 @@
-from ecforensics.ingestion.stream_reassembly import _reassemble_direction
+from ecforensics.ingestion.stream_reassembly import _reassemble_direction, _stream_meta_from_rows
 
 
 def test_reassembles_out_of_order_segments():
@@ -42,3 +42,15 @@ def test_empty_direction_is_incomplete():
     payload, gap = _reassemble_direction([])
     assert payload == b""
     assert not gap
+
+
+def test_discovers_smtp_stream_when_capture_has_no_syn():
+    rows = "42\t10.0.0.2\t\t25\t10.0.0.1\t\t51000\n"
+    streams = _stream_meta_from_rows(rows, set())
+    assert streams == [{
+        "stream_id": "42",
+        "client_ip": "10.0.0.1",
+        "client_port": 51000,
+        "server_ip": "10.0.0.2",
+        "server_port": 25,
+    }]
