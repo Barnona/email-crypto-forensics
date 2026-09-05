@@ -23,7 +23,8 @@ def test_resolve_unknown_version_without_server_hello():
 
 def test_extract_sni_from_client_hello_payload():
     name = b"mail.example.test"
-    sni_body = b"\x00" + (len(name) + 3).to_bytes(2, "big") + b"\x00" + len(name).to_bytes(2, "big") + name
+    server_name_entry = b"\x00" + len(name).to_bytes(2, "big") + name
+    sni_body = len(server_name_entry).to_bytes(2, "big") + server_name_entry
     extension = b"\x00\x00" + len(sni_body).to_bytes(2, "big") + sni_body
     body = b"\x03\x03" + bytes(range(32)) + b"\x00" + b"\x00\x02\xc0\x2f" + b"\x01\x00" + len(extension).to_bytes(2, "big") + extension
     handshake = b"\x01" + len(body).to_bytes(3, "big") + body
