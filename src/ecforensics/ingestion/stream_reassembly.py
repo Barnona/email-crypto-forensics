@@ -21,6 +21,11 @@ class TCPStream:
     end_time: datetime | None = None
 
 
+# Ports that identify the server side of the supported mail protocols. They are
+# used only as a fallback when a capture starts after the TCP handshake.
+_MAIL_SERVER_PORTS = {25, 110, 143, 465, 587, 993, 995}
+
+
 def _run_tshark(args: list[str]) -> str:
     try:
         result = subprocess.run(["tshark", *args], capture_output=True, text=True, check=True)
@@ -39,31 +44,65 @@ def _endpoint(ipv4: str, ipv6: str, port: str) -> tuple[str, int] | None:
         return None
 
 
-def _list_tcp_streams(pcap_path: str | Path) -> list[dict]:
-    """Discover TCP streams from the original SYN and support IPv4/IPv6."""
-    output = _run_tshark([
-        "-r", str(pcap_path),
-        "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0",
-        "-T", "fields", "-E", "separator=\t", "-E", "quote=n",
-        "-e", "tcp.stream", "-e", "ip.src", "-e", "ipv6.src",
-        "-e", "tcp.srcport", "-e", "ip.dst", "-e", "ipv6.dst", "-e", "tcp.dstport",
-    ])
-    seen: set[str] = set()
+def _stream_meta_from_rows(output: str, seen: set[str]) -> list[dict]:
+    """Build stream metadata from packet rows, including SYN-less captures."""
     streams: list[dict] = []
     for line in output.splitlines():
         parts = line.split("\t")
         if len(parts) != 7 or not parts[0] or parts[0] in seen:
             continue
-        client = _endpoint(parts[1], parts[2], parts[3])
-        server = _endpoint(parts[4], parts[5], parts[6])
-        if client is None or server is None:
+        src = _endpoint(parts[1], parts[2], parts[3])
+        dst = _endpoint(parts[4], parts[5], parts[6])
+        if src is None or dst is None:
             continue
+
+        # Prefer a well-known mail service port when the capture begins
+        # mid-stream. Otherwise retain the first observed direction as the
+        # client-to-server direction; protocol identification can still reject
+        # unrelated TCP streams later in the pipeline.
+        if src[1] in _MAIL_SERVER_PORTS and dst[1] not in _MAIL_SERVER_PORTS:
+            client, server = dst, src
+        elif dst[1] in _MAIL_SERVER_PORTS and src[1] not in _MAIL_SERVER_PORTS:
+            client, server = src, dst
+        else:
+            client, server = src, dst
+
         seen.add(parts[0])
         streams.append({
             "stream_id": parts[0],
             "client_ip": client[0], "client_port": client[1],
             "server_ip": server[0], "server_port": server[1],
         })
+    return streams
+
+
+def _list_tcp_streams(pcap_path: str | Path) -> list[dict]:
+    """Discover TCP streams, including captures that start after the SYN."""
+    fields = [
+        "-T", "fields", "-E", "separator=\t", "-E", "quote=n",
+        "-e", "tcp.stream", "-e", "ip.src", "-e", "ipv6.src",
+        "-e", "tcp.srcport", "-e", "ip.dst", "-e", "ipv6.dst", "-e", "tcp.dstport",
+    ]
+    seen: set[str] = set()
+    streams: list[dict] = []
+
+    # First use the original SYN to establish the true client/server roles.
+    syn_output = _run_tshark([
+        "-r", str(pcap_path),
+        "-Y", "tcp.flags.syn==1 && tcp.flags.ack==0",
+        *fields,
+    ])
+    streams.extend(_stream_meta_from_rows(syn_output, seen))
+
+    # A partial capture may contain only the middle/end of a TCP session and
+    # therefore no original SYN. Discover those streams as a fallback, then
+    # infer the server side from the supported mail-service ports.
+    all_output = _run_tshark([
+        "-r", str(pcap_path),
+        "-Y", "tcp",
+        *fields,
+    ])
+    streams.extend(_stream_meta_from_rows(all_output, seen))
     return streams
 
 
